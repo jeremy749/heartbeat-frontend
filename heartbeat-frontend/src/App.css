@@ -466,6 +466,82 @@
   line-height: 1.5;
 }
 
+.login-error {
+  font-size: 0.85rem;
+  color: var(--red);
+}
+
+.metric-sub {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* ── Trends toolbar ───────────────────────────────────────────────────────── */
+.trends-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Account view ─────────────────────────────────────────────────────────── */
+.account {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.account-info {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.account-value {
+  font-family: var(--mono);
+  font-size: 1.3rem;
+  margin-top: 4px;
+}
+
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 320px;
+}
+
+.account-danger {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.danger-btn {
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: var(--red-bg);
+  color: var(--red);
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.danger-btn.danger-strong {
+  background: var(--red);
+  color: #1a0606;
+}
+
+.account-msg {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 720px) {
+  .account-info {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Patient selector + user menu in nav ──────────────────────────────────── */
 .patient-select select,
 .history-controls select {

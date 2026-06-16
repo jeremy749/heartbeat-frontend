@@ -37,60 +37,36 @@ export function evaluateAlert(latest, recent = [], thresholds = ALERT_THRESHOLDS
   const window = recent.slice(0, t.window)
   const vCount = window.filter((b) => b.classification === 'Ventricular').length
   const abnormalCount = window.filter((b) => ABNORMAL_CLASSES.has(b.classification)).length
+  const isAbnormal = ABNORMAL_CLASSES.has(cls)
 
   // Uncertain: the model isn't sure, or the beat is unclassified. Say so plainly.
   if (cls === 'Unclassified' || conf < t.minConfidence) {
-    return {
-      level: 'uncertain',
-      label: 'Uncertain',
-      detail: 'Low-confidence reading — not a diagnosis.',
-    }
+    return { level: 'uncertain', label: 'Uncertain', detail: 'Low-confidence reading — not a diagnosis.' }
   }
 
-  // Red: confident ventricular beat, a run of them, or any abnormal beat paired
-  // with an abnormal heart-rate flag from the device.
-  if (cls === 'Ventricular' && conf >= t.vConfidenceRed) {
-    return {
-      level: 'red',
-      label: 'Urgent — review now',
-      detail: `Confident ventricular beat (${Math.round(conf * 100)}%).`,
+  // Red/amber escalation only when THIS beat is itself abnormal — a confident
+  // normal beat must never read as "Urgent" because of earlier beats.
+  if (isAbnormal) {
+    if (cls === 'Ventricular' && conf >= t.vConfidenceRed) {
+      return { level: 'red', label: 'Urgent — review now', detail: `Confident ventricular beat (${Math.round(conf * 100)}%).` }
     }
-  }
-  if (vCount >= t.vCountRedInWindow) {
-    return {
-      level: 'red',
-      label: 'Urgent — review now',
-      detail: `${vCount} ventricular beats in the last ${window.length}.`,
+    if (vCount >= t.vCountRedInWindow) {
+      return { level: 'red', label: 'Urgent — review now', detail: `Ventricular run — ${vCount} of the last ${window.length} beats.` }
     }
-  }
-  if ((flags.includes('TACHY') || flags.includes('BRADY')) && ABNORMAL_CLASSES.has(cls)) {
-    return {
-      level: 'red',
-      label: 'Urgent — review now',
-      detail: 'Abnormal rhythm with an abnormal heart rate.',
+    if (flags.includes('TACHY') || flags.includes('BRADY')) {
+      return { level: 'red', label: 'Urgent — review now', detail: 'Abnormal rhythm with an abnormal heart rate.' }
     }
+    return { level: 'amber', label: 'Caution', detail: `${cls} beat detected — keep watching.` }
   }
 
-  // Amber: a single confident abnormal beat, several abnormals in the window, or
-  // an irregular-rhythm flag.
-  if (
-    (ABNORMAL_CLASSES.has(cls) && conf >= t.abnormalConfidenceAmber) ||
-    abnormalCount >= t.abnormalCountAmberInWindow ||
-    flags.includes('IRREG')
-  ) {
-    return {
-      level: 'amber',
-      label: 'Caution',
-      detail: `${cls} beat detected — keep watching.`,
-    }
+  // Current beat is normal and confident.
+  if (abnormalCount >= t.abnormalCountAmberInWindow) {
+    return { level: 'amber', label: 'Caution', detail: `Recent abnormal beats — ${abnormalCount} in the last ${window.length}.` }
   }
-
-  // Green: normal and confident.
-  return {
-    level: 'green',
-    label: 'Normal',
-    detail: 'Rhythm within normal limits.',
+  if (flags.includes('IRREG')) {
+    return { level: 'amber', label: 'Caution', detail: 'Irregular rhythm detected.' }
   }
+  return { level: 'green', label: 'Normal', detail: 'Rhythm within normal limits.' }
 }
 
 // Severity ordering, handy for sorting or "highest alert in the last hour".
