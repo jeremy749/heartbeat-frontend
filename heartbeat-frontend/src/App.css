@@ -536,6 +536,85 @@
   font-size: 0.9rem;
 }
 
+/* ── Info tooltip dot ─────────────────────────────────────────────────────── */
+.info-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.62rem;
+  font-style: italic;
+  font-weight: 700;
+  cursor: help;
+  vertical-align: middle;
+}
+
+.info-dot:hover,
+.info-dot:focus {
+  color: var(--text);
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* ── Beat-type legend ─────────────────────────────────────────────────────── */
+.beat-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.beat-legend li {
+  display: grid;
+  grid-template-columns: 14px 140px 1fr;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  align-self: center;
+}
+
+.legend-name {
+  font-weight: 600;
+}
+
+.legend-desc {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+/* ── Date inputs ──────────────────────────────────────────────────────────── */
+.filter input[type='date'] {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  color-scheme: dark;
+}
+
+@media (max-width: 720px) {
+  .beat-legend li {
+    grid-template-columns: 14px 1fr;
+  }
+  .legend-desc {
+    grid-column: 2;
+  }
+}
+
 @media (max-width: 720px) {
   .account-info {
     grid-template-columns: 1fr;

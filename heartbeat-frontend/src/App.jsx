@@ -58,6 +58,35 @@ const CLASS_COLORS = {
   Unclassified: 'var(--text-faint)',
 }
 
+// Hover/focus explanations for the HRV metrics.
+const INFO = {
+  meanBpm: 'Mean heart rate — your average beats per minute over recent beats.',
+  rmssd:
+    'RMSSD — short-term, beat-to-beat heart-rate variability, in milliseconds. ' +
+    'Higher often reflects a more relaxed, recovered state.',
+  sdnn:
+    'SDNN — overall heart-rate variability across the period, in milliseconds. ' +
+    'Higher means more variation. Most meaningful over longer recordings.',
+}
+
+// What each beat classification means (plain, non-diagnostic).
+const BEAT_TYPES = [
+  ['Normal', "A normal beat from the heart's natural pacemaker."],
+  ['Supraventricular', 'An early/abnormal beat starting above the ventricles (e.g. atrial).'],
+  ['Ventricular', 'A beat starting in the ventricles (e.g. a PVC) — watched more closely.'],
+  ['Fusion', 'A blend of a normal and a ventricular beat occurring together.'],
+  ['Unclassified', 'The model could not confidently categorize this beat (or it was paced/unknown).'],
+]
+
+// A small "i" badge that shows an explanation on hover or keyboard focus.
+function InfoDot({ text }) {
+  return (
+    <span className="info-dot" tabIndex={0} title={text} aria-label={text}>
+      i
+    </span>
+  )
+}
+
 const applyBeatToStats = (prev, beat) => {
   const base = prev || { total_beats: 0, abnormal_beats: 0, counts_by_class: {} }
   const counts = { ...base.counts_by_class }
@@ -168,17 +197,23 @@ function TrendsView({ trends, strip }) {
 
       <div className="metrics">
         <article className="metric">
-          <p className="metric-label">Mean heart rate</p>
+          <p className="metric-label">
+            Mean heart rate <InfoDot text={INFO.meanBpm} />
+          </p>
           <p className="metric-value">{hrv.mean_bpm ?? '—'}</p>
           <p className="metric-sub">bpm</p>
         </article>
         <article className="metric">
-          <p className="metric-label">HRV · RMSSD</p>
+          <p className="metric-label">
+            HRV · RMSSD <InfoDot text={INFO.rmssd} />
+          </p>
           <p className="metric-value">{hrv.rmssd ?? '—'}</p>
           <p className="metric-sub">ms (beat-to-beat)</p>
         </article>
         <article className="metric">
-          <p className="metric-label">HRV · SDNN</p>
+          <p className="metric-label">
+            HRV · SDNN <InfoDot text={INFO.sdnn} />
+          </p>
           <p className="metric-value">{hrv.sdnn ?? '—'}</p>
           <p className="metric-sub">ms (overall)</p>
         </article>
@@ -258,6 +293,21 @@ function TrendsView({ trends, strip }) {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2 className="panel-title">What the beat types mean</h2>
+        </div>
+        <ul className="beat-legend">
+          {BEAT_TYPES.map(([name, desc]) => (
+            <li key={name}>
+              <span className="legend-dot" style={{ background: CLASS_COLORS[name] || 'var(--accent)' }} />
+              <span className="legend-name">{name}</span>
+              <span className="legend-desc">{desc}</span>
+            </li>
+          ))}
+        </ul>
       </section>
     </section>
   )
@@ -385,6 +435,12 @@ function Dashboard({ user, onSignOut }) {
   const [filterType, setFilterType] = useState('All')
   const [abnormalOnly, setAbnormalOnly] = useState(false)
   const [minConfidence, setMinConfidence] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  // Convert a yyyy-mm-dd input into an ISO timestamp bound (start/end of day).
+  const since = dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined
+  const until = dateTo ? new Date(`${dateTo}T23:59:59`).toISOString() : undefined
 
   const wsRef = useRef(null)
   const simRef = useRef(null)
@@ -398,7 +454,7 @@ function Dashboard({ user, onSignOut }) {
   // Initial load (scoped to this user)
   useEffect(() => {
     let cancelled = false
-    Promise.all([fetchHistory({ limit: 100 }), fetchStats(), fetchLatest()])
+    Promise.all([fetchHistory({ limit: 200, since, until }), fetchStats(), fetchLatest()])
       .then(([h, s, l]) => {
         if (cancelled) return
         setHistory(Array.isArray(h) ? h : [])
@@ -409,7 +465,7 @@ function Dashboard({ user, onSignOut }) {
     return () => {
       cancelled = true
     }
-  }, [userId])
+  }, [userId, since, until])
 
   // Trends refresh while on the trends tab
   useEffect(() => {
@@ -529,6 +585,8 @@ function Dashboard({ user, onSignOut }) {
     type: filterType === 'All' ? undefined : filterType,
     abnormal_only: abnormalOnly || undefined,
     min_confidence: minConfidence || undefined,
+    since,
+    until,
   })
 
   const loadMore = () =>
@@ -679,6 +737,14 @@ function Dashboard({ user, onSignOut }) {
                   <option value="0.8">≥ 80%</option>
                   <option value="0.9">≥ 90%</option>
                 </select>
+              </label>
+              <label className="filter">
+                <span>From</span>
+                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+              </label>
+              <label className="filter">
+                <span>To</span>
+                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
               </label>
               <label className="filter filter-check">
                 <input type="checkbox" checked={abnormalOnly} onChange={(e) => setAbnormalOnly(e.target.checked)} />
