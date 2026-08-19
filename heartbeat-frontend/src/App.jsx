@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts'
 import {
-  WS_URL,
+  WS_AUTH_CLOSE_CODES,
   changePassword as apiChangePassword,
   deleteAccount as apiDeleteAccount,
   deleteReadings as apiDeleteReadings,
@@ -28,6 +28,7 @@ import {
   reportUrl,
   setAuthErrorHandler,
   setAuthToken,
+  wsUrl,
 } from './api'
 import { evaluateAlert } from './alerts'
 import './App.css'
@@ -487,6 +488,13 @@ function Dashboard({ user, onSignOut }) {
 
   const wsRef = useRef(null)
   const simRef = useRef(null)
+  // Held in a ref so the socket effect can sign out without listing onSignOut
+  // as a dependency - its identity changes on every parent render, which would
+  // tear down and reopen the socket continuously.
+  const signOutRef = useRef(onSignOut)
+  useEffect(() => {
+    signOutRef.current = onSignOut
+  })
 
   // Periodic re-render so the "streaming vs waiting" label stays honest.
   useEffect(() => {
@@ -548,7 +556,7 @@ function Dashboard({ user, onSignOut }) {
     const connect = () => {
       let ws
       try {
-        ws = new WebSocket(WS_URL)
+        ws = new WebSocket(wsUrl())
       } catch {
         setConnection('offline')
         return
@@ -560,7 +568,8 @@ function Dashboard({ user, onSignOut }) {
           const msg = JSON.parse(event.data)
           if (msg.type !== 'beat') return
           const beat = msg.data
-          // Single-user: only show beats that belong to the signed-in user.
+          // Defence in depth. The server authenticates the socket and should
+          // only ever send this user's beats; drop anything else that arrives.
           if (beat.user_id != null && beat.user_id !== userId) return
           setLastBeatAt(Date.now())
           setLatest(beat)
@@ -579,9 +588,15 @@ function Dashboard({ user, onSignOut }) {
           /* ignore malformed frames */
         }
       }
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (stopped) return
         setConnection('offline')
+        if (WS_AUTH_CLOSE_CODES.has(event.code)) {
+          // The server rejected our token. Retrying cannot fix that.
+          stopped = true
+          signOutRef.current()
+          return
+        }
         reconnectTimer = setTimeout(connect, 2000)
       }
       ws.onerror = () => ws.close()

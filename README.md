@@ -57,10 +57,12 @@ The Git repository root is a thin wrapper; the whole application lives in the
 
 ### Live monitor (`Monitor` tab)
 
-- Opens a WebSocket to `${API_BASE}/ws` and listens for `{ type: "beat", data, samples }`
-  frames; on close it retries every 2 seconds.
-- Beats carrying a `user_id` that isn't the signed-in user are ignored, so one shared
-  stream can serve multiple accounts.
+- Opens a WebSocket to `${API_BASE}/ws?token=…` and listens for
+  `{ type: "beat", data, samples }` frames; on close it retries every 2 seconds, except
+  after an auth rejection (close code `1008`/`4401`), which signs the user out.
+- The server is expected to authenticate the socket and stream only that user's beats.
+  The client additionally drops beats whose `user_id` isn't the signed-in user, as
+  defence in depth.
 - Each beat updates the latest reading, prepends to history (capped at 200 rows), and
   increments the local stat counters optimistically.
 - The connection pill shows `Live` / `Connecting` / `Offline · demo`. A separate signal
@@ -221,7 +223,7 @@ Everything the frontend calls, all defined in `src/api.js`:
 | `DELETE` | `/api/account` | Delete the account |
 | `GET` | `/api/export.csv?…&token` | Filtered CSV download |
 | `GET` | `/api/report.pdf?token` | PDF report download |
-| `WS` | `/ws` | Beat stream: `{ type: "beat", data: <reading>, samples?: number[] }` |
+| `WS` | `/ws?token=…` | Authenticated beat stream: `{ type: "beat", data: <reading>, samples?: number[] }`. The server must scope the stream to the token's user, and may close with `1008`/`4401` to reject it. |
 
 ### Reading shape
 

@@ -4,7 +4,18 @@
 export const API_BASE =
   import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000'
 
-export const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws'
+const WS_ORIGIN = API_BASE.replace(/^http/, 'ws')
+
+// The browser WebSocket API cannot set an Authorization header, so the session
+// token travels as a query parameter. The server is expected to authenticate on
+// upgrade and send only this user's beats; the user_id check on the client is a
+// second line of defence, not the boundary.
+export const wsUrl = () => `${WS_ORIGIN}/ws${qs({ token: authToken })}`
+
+// Close codes meaning "that token is no good": 1008 is the standard policy
+// violation code, 4401 the conventional private-range mapping of HTTP 401.
+// Reconnecting after one of these just hammers the server, so the app signs out.
+export const WS_AUTH_CLOSE_CODES = new Set([1008, 4401])
 
 // ── Session token ─────────────────────────────────────────────────────────────
 let authToken = null
