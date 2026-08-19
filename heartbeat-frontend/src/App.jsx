@@ -31,6 +31,7 @@ import {
   wsUrl,
 } from './api'
 import { evaluateAlert } from './alerts'
+import ErrorBoundary from './ErrorBoundary.jsx'
 import './App.css'
 
 const USER_KEY = 'heartbeat_user'
@@ -206,7 +207,7 @@ function LoginScreen({ onSignedIn }) {
 }
 
 // ── Trends view ───────────────────────────────────────────────────────────────
-function TrendsView({ trends, strip }) {
+function TrendsView({ trends, strip, error }) {
   const hr = (trends?.heart_rate || []).map((p, i) => ({ i, bpm: p.bpm }))
   const classDist = Object.entries(trends?.class_distribution || {}).map(([name, count]) => ({ name, count }))
   const alertDist = trends?.alert_distribution || {}
@@ -216,6 +217,7 @@ function TrendsView({ trends, strip }) {
 
   return (
     <section className="trends">
+      {error && <p className="panel-error">{error}</p>}
       <div className="trends-toolbar">
         <a className="export-btn" href={reportUrl()} target="_blank" rel="noreferrer">
           Download PDF report
@@ -347,7 +349,12 @@ function AccountView({ onSignOut }) {
   const [next, setNext] = useState('')
   const [msg, setMsg] = useState('')
 
-  const refresh = () => fetchAccount().then(setAccount).catch(() => {})
+  const refresh = () =>
+    fetchAccount()
+      .then(setAccount)
+      .catch((err) => {
+        if (err.message !== 'UNAUTHORIZED') setMsg('Could not load your account details.')
+      })
   useEffect(() => {
     refresh()
   }, [])
@@ -449,8 +456,14 @@ function Dashboard({ user, onSignOut }) {
   const [connection, setConnection] = useState('connecting')
 
   const [history, setHistory] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState(null)
+  const [historyReloads, setHistoryReloads] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState(null)
   const [allLoaded, setAllLoaded] = useState(false)
+  const [summaryError, setSummaryError] = useState(null)
+  const [trendsError, setTrendsError] = useState(null)
   const [recentBeats, setRecentBeats] = useState([])
   const [stats, setStats] = useState(null)
   const [latest, setLatest] = useState(null)
@@ -507,19 +520,30 @@ function Dashboard({ user, onSignOut }) {
   useEffect(() => {
     let cancelled = false
     setAllLoaded(false)
+    setHistoryLoading(true)
+    setHistoryError(null)
+    setLoadMoreError(null)
     fetchHistory({ ...historyParams, limit: HISTORY_PAGE })
       .then((h) => {
-        if (!cancelled) setHistory(Array.isArray(h) ? h : [])
+        if (cancelled) return
+        setHistory(Array.isArray(h) ? h : [])
+        setHistoryLoading(false)
       })
-      .catch(() => {})
+      .catch((err) => {
+        if (cancelled) return
+        setHistoryLoading(false)
+        // A 401 already signs the user out; don't also shout about it.
+        if (err.message !== 'UNAUTHORIZED') setHistoryError('Could not load readings.')
+      })
     return () => {
       cancelled = true
     }
-  }, [userId, historyParams])
+  }, [userId, historyParams, historyReloads])
 
   // Summary data plus the unfiltered beat window the alert engine runs on.
   useEffect(() => {
     let cancelled = false
+    setSummaryError(null)
     Promise.all([fetchStats(), fetchLatest(), fetchHistory({ limit: ALERT_WINDOW })])
       .then(([s, l, recent]) => {
         if (cancelled) return
@@ -527,7 +551,10 @@ function Dashboard({ user, onSignOut }) {
         setLatest(l)
         setRecentBeats(Array.isArray(recent) ? recent : [])
       })
-      .catch(() => {})
+      .catch((err) => {
+        if (cancelled || err.message === 'UNAUTHORIZED') return
+        setSummaryError('Could not load your latest readings — figures may be stale.')
+      })
     return () => {
       cancelled = true
     }
@@ -538,8 +565,17 @@ function Dashboard({ user, onSignOut }) {
     if (page !== 'trends') return
     let active = true
     const load = () => {
-      fetchTrends(60).then((t) => active && setTrends(t)).catch(() => {})
-      fetchStrip(8).then((s) => active && setStrip(s)).catch(() => {})
+      Promise.all([fetchTrends(60), fetchStrip(8)])
+        .then(([t, s]) => {
+          if (!active) return
+          setTrends(t)
+          setStrip(s)
+          setTrendsError(null)
+        })
+        .catch((err) => {
+          if (!active || err.message === 'UNAUTHORIZED') return
+          setTrendsError('Could not refresh trends — retrying every few seconds.')
+        })
     }
     load()
     const id = setInterval(load, 5000)
@@ -669,6 +705,9 @@ function Dashboard({ user, onSignOut }) {
 
   const exportHref = exportUrl(historyParams)
 
+  const hasFilters =
+    filterType !== 'All' || abnormalOnly || minConfidence !== '' || dateFrom !== '' || dateTo !== ''
+
   // Page by timestamp, not by offset. Beats keep being recorded while the user
   // reads, and every new row shifts an offset-based window by one - which
   // silently duplicates rows at the seam and skips others entirely. Asking for
@@ -678,6 +717,7 @@ function Dashboard({ user, onSignOut }) {
     const oldest = oldestTimestamp(history)
     if (!oldest) return
     setLoadingMore(true)
+    setLoadMoreError(null)
     fetchHistory({ ...historyParams, limit: LOAD_MORE_PAGE, until: oldest })
       .then((older) => {
         const rows = Array.isArray(older) ? older : []
@@ -688,8 +728,13 @@ function Dashboard({ user, onSignOut }) {
         setAllLoaded(added.length === 0 || rows.length < LOAD_MORE_PAGE)
         setLoadingMore(false)
       })
-      .catch(() => setLoadingMore(false))
+      .catch((err) => {
+        setLoadingMore(false)
+        if (err.message !== 'UNAUTHORIZED') setLoadMoreError('Could not load older readings.')
+      })
   }
+
+  const retryHistory = () => setHistoryReloads((n) => n + 1)
 
   const connectionLabel =
     connection === 'live' ? 'Live' : connection === 'connecting' ? 'Connecting' : 'Offline · demo'
@@ -729,6 +774,10 @@ function Dashboard({ user, onSignOut }) {
         </div>
       </nav>
 
+      {/* Renders children untouched until something throws, so the shell and
+          nav survive a bad payload and the user can switch tabs. Keyed on the
+          page so moving tabs clears a previous failure. */}
+      <ErrorBoundary key={page} title="This view failed to render">
       {page === 'dashboard' && (
         <>
           <section className={`alert-banner alert-${alert.level}`} role="status">
@@ -800,10 +849,12 @@ function Dashboard({ user, onSignOut }) {
               </article>
             ))}
           </section>
+
+          {summaryError && <p className="panel-error">{summaryError}</p>}
         </>
       )}
 
-      {page === 'trends' && <TrendsView trends={trends} strip={strip} />}
+      {page === 'trends' && <TrendsView trends={trends} strip={strip} error={trendsError} />}
 
       {page === 'account' && <AccountView onSignOut={onSignOut} />}
 
@@ -864,10 +915,27 @@ function Dashboard({ user, onSignOut }) {
                 </tr>
               </thead>
               <tbody>
-                {filteredHistory.length === 0 ? (
+                {historyLoading ? (
                   <tr>
                     <td colSpan={4} className="empty">
-                      No readings yet. Start the backend and a data feed to record beats.
+                      Loading readings…
+                    </td>
+                  </tr>
+                ) : historyError ? (
+                  <tr>
+                    <td colSpan={4} className="empty empty-error">
+                      {historyError}{' '}
+                      <button type="button" className="retry-btn" onClick={retryHistory}>
+                        Retry
+                      </button>
+                    </td>
+                  </tr>
+                ) : filteredHistory.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="empty">
+                      {hasFilters
+                        ? 'No readings match these filters.'
+                        : 'No readings yet. Start the backend and a data feed to record beats.'}
                     </td>
                   </tr>
                 ) : (
@@ -886,6 +954,7 @@ function Dashboard({ user, onSignOut }) {
               </tbody>
             </table>
           </div>
+          {loadMoreError && <p className="panel-error">{loadMoreError}</p>}
           {allLoaded ? (
             <p className="load-more-done">No older readings.</p>
           ) : (
@@ -900,6 +969,7 @@ function Dashboard({ user, onSignOut }) {
           )}
         </section>
       )}
+      </ErrorBoundary>
 
       <footer className="disclaimer">
         Educational / research project. Not a medical device and not a diagnosis.
