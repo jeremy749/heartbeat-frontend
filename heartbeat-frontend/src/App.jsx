@@ -42,6 +42,9 @@ const generatePoint = (index, phase) => {
 const INITIAL_POINTS = 60
 const STREAM_IDLE_MS = 10000 // no beat for this long => not "streaming"
 const HISTORY_PAGE = 200 // rows fetched for the history table
+const LOAD_MORE_PAGE = 50 // rows added per "Load older"
+// Ceiling on rows held in memory once the user has paged back through history.
+const HISTORY_HARD_CAP = 2000
 // Unfiltered recent beats kept for the alert engine. The alert must reflect the
 // real rhythm, never whatever the history tab happens to be filtered to.
 const ALERT_WINDOW = 25
@@ -89,6 +92,25 @@ function InfoDot({ text }) {
       i
     </span>
   )
+}
+
+// Stable identity for a reading, used for React keys and for de-duplicating
+// pages that overlap on their boundary timestamp.
+const readingKey = (r) => r.id ?? r.recorded_at
+
+// Oldest recorded_at in a set of readings, or null when there are none. Parsed
+// rather than string-compared so mixed ISO offsets still order correctly.
+const oldestTimestamp = (rows) => {
+  let oldest = null
+  let oldestMs = Infinity
+  for (const r of rows) {
+    const at = Date.parse(r.recorded_at)
+    if (!Number.isNaN(at) && at < oldestMs) {
+      oldestMs = at
+      oldest = r.recorded_at
+    }
+  }
+  return oldest
 }
 
 const applyBeatToStats = (prev, beat) => {
@@ -426,6 +448,8 @@ function Dashboard({ user, onSignOut }) {
   const [connection, setConnection] = useState('connecting')
 
   const [history, setHistory] = useState([])
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [allLoaded, setAllLoaded] = useState(false)
   const [recentBeats, setRecentBeats] = useState([])
   const [stats, setStats] = useState(null)
   const [latest, setLatest] = useState(null)
@@ -474,6 +498,7 @@ function Dashboard({ user, onSignOut }) {
   // server's job and the table matches the CSV export row for row.
   useEffect(() => {
     let cancelled = false
+    setAllLoaded(false)
     fetchHistory({ ...historyParams, limit: HISTORY_PAGE })
       .then((h) => {
         if (!cancelled) setHistory(Array.isArray(h) ? h : [])
@@ -540,7 +565,12 @@ function Dashboard({ user, onSignOut }) {
           setLastBeatAt(Date.now())
           setLatest(beat)
           setRecentBeats((prev) => [beat, ...prev].slice(0, ALERT_WINDOW))
-          setHistory((prev) => [beat, ...prev].slice(0, HISTORY_PAGE))
+          // Grow past HISTORY_PAGE rather than truncating: once the user has
+          // paged back through history, a single live beat must not throw
+          // those loaded pages away.
+          setHistory((prev) =>
+            [beat, ...prev].slice(0, Math.min(HISTORY_HARD_CAP, Math.max(HISTORY_PAGE, prev.length + 1))),
+          )
           setStats((prev) => applyBeatToStats(prev, beat))
           if (Array.isArray(msg.samples) && msg.samples.length) {
             setWaveform(msg.samples.map((value, x) => ({ x, value })))
@@ -624,10 +654,27 @@ function Dashboard({ user, onSignOut }) {
 
   const exportHref = exportUrl(historyParams)
 
-  const loadMore = () =>
-    fetchHistory({ limit: 50, offset: history.length })
-      .then((older) => setHistory((prev) => [...prev, ...(Array.isArray(older) ? older : [])]))
-      .catch(() => {})
+  // Page by timestamp, not by offset. Beats keep being recorded while the user
+  // reads, and every new row shifts an offset-based window by one - which
+  // silently duplicates rows at the seam and skips others entirely. Asking for
+  // "older than the oldest row I hold" is stable under insertions.
+  const loadMore = () => {
+    if (loadingMore || allLoaded) return
+    const oldest = oldestTimestamp(history)
+    if (!oldest) return
+    setLoadingMore(true)
+    fetchHistory({ ...historyParams, limit: LOAD_MORE_PAGE, until: oldest })
+      .then((older) => {
+        const rows = Array.isArray(older) ? older : []
+        // `until` is inclusive, so the boundary row comes back with the page.
+        const seen = new Set(history.map(readingKey))
+        const added = rows.filter((r) => !seen.has(readingKey(r)))
+        if (added.length) setHistory((prev) => [...prev, ...added])
+        setAllLoaded(added.length === 0 || rows.length < LOAD_MORE_PAGE)
+        setLoadingMore(false)
+      })
+      .catch(() => setLoadingMore(false))
+  }
 
   const connectionLabel =
     connection === 'live' ? 'Live' : connection === 'connecting' ? 'Connecting' : 'Offline · demo'
@@ -810,7 +857,7 @@ function Dashboard({ user, onSignOut }) {
                   </tr>
                 ) : (
                   filteredHistory.map((reading) => (
-                    <tr key={reading.id ?? reading.recorded_at}>
+                    <tr key={readingKey(reading)}>
                       <td className="mono">{new Date(reading.recorded_at).toLocaleString()}</td>
                       <td>{reading.classification}</td>
                       <td className="mono">{Math.round((reading.confidence || 0) * 100)}%</td>
@@ -824,9 +871,18 @@ function Dashboard({ user, onSignOut }) {
               </tbody>
             </table>
           </div>
-          <button type="button" className="load-more" onClick={loadMore}>
-            Load older
-          </button>
+          {allLoaded ? (
+            <p className="load-more-done">No older readings.</p>
+          ) : (
+            <button
+              type="button"
+              className="load-more"
+              onClick={loadMore}
+              disabled={loadingMore || history.length === 0}
+            >
+              {loadingMore ? 'Loading…' : 'Load older'}
+            </button>
+          )}
         </section>
       )}
 

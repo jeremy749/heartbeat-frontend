@@ -706,8 +706,20 @@
   cursor: pointer;
 }
 
-.load-more:hover {
+.load-more:hover:not(:disabled) {
   color: var(--text);
+}
+
+.load-more:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.load-more-done {
+  align-self: center;
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-size: 0.85rem;
 }
 
 /* ── Trends ───────────────────────────────────────────────────────────────── */
