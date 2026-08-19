@@ -1,18 +1,28 @@
-# React + Vite
+# Heartbeat Frontend — app directory
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the Vite app itself. Full documentation (features, alert rules, backend
+contract, data shapes, known limitations) lives in the [root README](../README.md).
 
-Currently, two official plugins are available:
+## Quickstart
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+cp .env.example .env      # optional; defaults to http://localhost:8000
+npm run dev               # http://localhost:5173
+```
 
-## React Compiler
+| Command | Effect |
+| --- | --- |
+| `npm run dev` | Dev server with HMR |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the built bundle |
+| `npm run lint` | ESLint over the project |
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+## Source map
 
-Note: This will impact Vite dev & build performances.
+- `src/App.jsx` — login screen, dashboard, trends, history, and account views
+- `src/api.js` — REST client, bearer token handling, WebSocket URL
+- `src/alerts.js` — pure alert-evaluation logic and thresholds
+- `src/index.css` — theme tokens; `src/App.css` — component styling
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Educational / research project. Not a medical device and not a diagnosis.
