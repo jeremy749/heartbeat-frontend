@@ -41,6 +41,10 @@ const generatePoint = (index, phase) => {
 }
 const INITIAL_POINTS = 60
 const STREAM_IDLE_MS = 10000 // no beat for this long => not "streaming"
+const HISTORY_PAGE = 200 // rows fetched for the history table
+// Unfiltered recent beats kept for the alert engine. The alert must reflect the
+// real rhythm, never whatever the history tab happens to be filtered to.
+const ALERT_WINDOW = 25
 
 const ALERT_ICON = { red: '⚠', amber: '!', green: '✓', uncertain: '?', none: '–' }
 const ALERT_LABEL = {
@@ -422,6 +426,7 @@ function Dashboard({ user, onSignOut }) {
   const [connection, setConnection] = useState('connecting')
 
   const [history, setHistory] = useState([])
+  const [recentBeats, setRecentBeats] = useState([])
   const [stats, setStats] = useState(null)
   const [latest, setLatest] = useState(null)
   const [trends, setTrends] = useState(null)
@@ -442,6 +447,20 @@ function Dashboard({ user, onSignOut }) {
   const since = dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined
   const until = dateTo ? new Date(`${dateTo}T23:59:59`).toISOString() : undefined
 
+  // Every filter the server understands, in one object. The table, "Load older"
+  // and the CSV export all send exactly this, so the export can never contain
+  // rows the table never showed.
+  const historyParams = useMemo(
+    () => ({
+      type: filterType === 'All' ? undefined : filterType,
+      abnormal_only: abnormalOnly || undefined,
+      min_confidence: minConfidence || undefined,
+      since,
+      until,
+    }),
+    [filterType, abnormalOnly, minConfidence, since, until],
+  )
+
   const wsRef = useRef(null)
   const simRef = useRef(null)
 
@@ -451,21 +470,35 @@ function Dashboard({ user, onSignOut }) {
     return () => clearInterval(id)
   }, [])
 
-  // Initial load (scoped to this user)
+  // History table — refetched whenever a filter changes, so filtering is the
+  // server's job and the table matches the CSV export row for row.
   useEffect(() => {
     let cancelled = false
-    Promise.all([fetchHistory({ limit: 200, since, until }), fetchStats(), fetchLatest()])
-      .then(([h, s, l]) => {
-        if (cancelled) return
-        setHistory(Array.isArray(h) ? h : [])
-        setStats(s)
-        setLatest(l)
+    fetchHistory({ ...historyParams, limit: HISTORY_PAGE })
+      .then((h) => {
+        if (!cancelled) setHistory(Array.isArray(h) ? h : [])
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [userId, since, until])
+  }, [userId, historyParams])
+
+  // Summary data plus the unfiltered beat window the alert engine runs on.
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([fetchStats(), fetchLatest(), fetchHistory({ limit: ALERT_WINDOW })])
+      .then(([s, l, recent]) => {
+        if (cancelled) return
+        setStats(s)
+        setLatest(l)
+        setRecentBeats(Array.isArray(recent) ? recent : [])
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
 
   // Trends refresh while on the trends tab
   useEffect(() => {
@@ -506,7 +539,8 @@ function Dashboard({ user, onSignOut }) {
           if (beat.user_id != null && beat.user_id !== userId) return
           setLastBeatAt(Date.now())
           setLatest(beat)
-          setHistory((prev) => [beat, ...prev].slice(0, 200))
+          setRecentBeats((prev) => [beat, ...prev].slice(0, ALERT_WINDOW))
+          setHistory((prev) => [beat, ...prev].slice(0, HISTORY_PAGE))
           setStats((prev) => applyBeatToStats(prev, beat))
           if (Array.isArray(msg.samples) && msg.samples.length) {
             setWaveform(msg.samples.map((value, x) => ({ x, value })))
@@ -556,7 +590,7 @@ function Dashboard({ user, onSignOut }) {
   }, [connection])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
-  const alert = useMemo(() => buildAlert(latest, history), [latest, history])
+  const alert = useMemo(() => buildAlert(latest, recentBeats), [latest, recentBeats])
   const confidencePct = latest ? Math.round((latest.confidence || 0) * 100) : null
   const currentBpm = latest?.bpm != null ? Math.round(latest.bpm) : '—'
   const currentClass = latest?.classification ?? 'No data'
@@ -571,23 +605,24 @@ function Dashboard({ user, onSignOut }) {
     { label: 'Signal', value: signalLabel, sub: connection === 'live' ? 'backend connected' : 'backend offline' },
   ]
 
+  // The server already applied these filters to what it sent. This second pass
+  // exists only for beats that arrive live over the socket, which bypass it.
   const filteredHistory = useMemo(() => {
     const minC = minConfidence ? parseFloat(minConfidence) : 0
-    return history.filter(
-      (r) =>
-        (filterType === 'All' || r.classification === filterType) &&
-        (!abnormalOnly || r.is_abnormal) &&
-        (r.confidence || 0) >= minC,
-    )
-  }, [history, filterType, abnormalOnly, minConfidence])
+    const sinceMs = since ? Date.parse(since) : null
+    const untilMs = until ? Date.parse(until) : null
+    return history.filter((r) => {
+      if (filterType !== 'All' && r.classification !== filterType) return false
+      if (abnormalOnly && !r.is_abnormal) return false
+      if ((r.confidence || 0) < minC) return false
+      const at = Date.parse(r.recorded_at)
+      if (sinceMs != null && at < sinceMs) return false
+      if (untilMs != null && at > untilMs) return false
+      return true
+    })
+  }, [history, filterType, abnormalOnly, minConfidence, since, until])
 
-  const exportHref = exportUrl({
-    type: filterType === 'All' ? undefined : filterType,
-    abnormal_only: abnormalOnly || undefined,
-    min_confidence: minConfidence || undefined,
-    since,
-    until,
-  })
+  const exportHref = exportUrl(historyParams)
 
   const loadMore = () =>
     fetchHistory({ limit: 50, offset: history.length })
