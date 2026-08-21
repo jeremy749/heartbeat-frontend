@@ -526,7 +526,11 @@ function Dashboard({ user, onSignOut }) {
     fetchHistory({ ...historyParams, limit: HISTORY_PAGE })
       .then((h) => {
         if (cancelled) return
-        setHistory(Array.isArray(h) ? h : [])
+        const rows = Array.isArray(h) ? h : []
+        setHistory(rows)
+        // A short first page means there is nothing older to ask for, so don't
+        // offer a "Load older" that can only come back empty.
+        setAllLoaded(rows.length < HISTORY_PAGE)
         setHistoryLoading(false)
       })
       .catch((err) => {

@@ -32,10 +32,12 @@ The Git repository root is a thin wrapper; the whole application lives in the
     │   ├── favicon.svg           tab icon (referenced from index.html)
     │   └── icons.svg             unused sprite left from earlier iterations
     └── src/
-        ├── main.jsx              React root, StrictMode mount
+        ├── main.jsx              React root, StrictMode mount, top-level boundary
         ├── App.jsx               all UI: login, dashboard, trends, history, account
         ├── api.js                REST client, auth token, WebSocket URL
         ├── alerts.js             pure alert-evaluation logic (no React)
+        ├── alerts.test.js        alert-engine test suite (node:test)
+        ├── ErrorBoundary.jsx     catches render errors so a panel fails, not the page
         ├── index.css             theme tokens + reset
         ├── App.css               component styling
         └── assets/               hero.png, react.svg, vite.svg (currently unreferenced)
@@ -45,11 +47,13 @@ The Git repository root is a thin wrapper; the whole application lives in the
 
 | File | Lines | What it holds |
 | --- | ---: | --- |
-| `src/App.jsx` | ~853 | `LoginScreen`, `TrendsView`, `AccountView`, `Dashboard`, and the top-level `App` that chooses between login and dashboard based on a persisted session. |
-| `src/api.js` | ~100 | `API_BASE` / `WS_URL` derivation, in-memory bearer token, 401 handling, and one thin function per backend endpoint. |
+| `src/App.jsx` | ~1033 | `LoginScreen`, `TrendsView`, `AccountView`, `Dashboard`, and the top-level `App` that chooses between login and dashboard based on a persisted session. |
+| `src/api.js` | ~111 | `API_BASE` / `wsUrl()` derivation, in-memory bearer token, 401 handling, and one thin function per backend endpoint. |
 | `src/alerts.js` | ~73 | `evaluateAlert()`, the tunable `ALERT_THRESHOLDS`, and `ALERT_RANK`. Pure functions, framework-free, unit-testable, and portable to the backend later. |
+| `src/alerts.test.js` | ~242 | 30 cases over `evaluateAlert()` — levels, precedence, threshold boundaries, window bounds, and the "a confident normal beat is never urgent" invariant. |
+| `src/ErrorBoundary.jsx` | ~35 | Class-component boundary. Returns children untouched when healthy, so it adds no DOM and no layout change. |
 | `src/index.css` | ~82 | CSS custom properties: dark clinical surfaces, semantic alert colors, ECG trace green, fonts, radius, shadow. |
-| `src/App.css` | ~743 | ~115 component classes — nav, alert banner, panels, metric cards, charts, tables, filters, forms. |
+| `src/App.css` | ~816 | ~125 component classes — nav, alert banner, panels, metric cards, charts, tables, filters, forms. |
 
 ---
 
@@ -63,8 +67,10 @@ The Git repository root is a thin wrapper; the whole application lives in the
 - The server is expected to authenticate the socket and stream only that user's beats.
   The client additionally drops beats whose `user_id` isn't the signed-in user, as
   defence in depth.
-- Each beat updates the latest reading, prepends to history (capped at 200 rows), and
-  increments the local stat counters optimistically.
+- Each beat updates the latest reading, prepends to the history table, feeds an
+  unfiltered 25-beat window used for alert evaluation, and increments the local stat
+  counters optimistically. The table holds 200 rows plus whatever the user has paged in,
+  up to a 2000-row ceiling.
 - The connection pill shows `Live` / `Connecting` / `Offline · demo`. A separate signal
   readout distinguishes `Streaming` from `Waiting for data` — if no beat arrives for
   10 seconds (`STREAM_IDLE_MS`) the label stops claiming a live feed.
@@ -122,11 +128,15 @@ open, and renders:
   dot with its alert label.
 - Filters — beat type, minimum confidence (any / ≥60% / ≥80% / ≥90%), from/to dates, and
   an abnormal-only checkbox.
-- Date bounds are converted to ISO `since`/`until` timestamps and sent to the backend,
-  which refetches; type, confidence, and abnormal-only are applied client-side to the
-  already-loaded rows.
-- **Export CSV** builds a download URL carrying the same filters plus the session token.
-- **Load older** pages in 50 more rows using an offset.
+- Every filter is sent to the server — type, min confidence, abnormal-only, and date
+  bounds converted to ISO `since`/`until` — so the table and the CSV export are built
+  from the same query. A second client-side pass applies the same predicates to beats
+  that arrive live over the socket, which bypass the server query.
+- **Export CSV** builds a download URL carrying those same filters plus the session token.
+- **Load older** pages in 50 more rows by asking for readings older than the oldest row
+  held, rather than by offset — offsets shift as new beats are recorded, which
+  duplicated and skipped rows. Overlapping boundary rows are de-duplicated by id.
+- Loading, empty, filtered-empty, and failed states are distinguished, with a retry.
 
 ### Account tab
 
@@ -162,16 +172,19 @@ This is deliberately simple project-grade auth, not production security.
 | Vite | 8.x | Dev server, build, preview |
 | Recharts | 3.8.1 | Line and bar charts in responsive containers |
 | ESLint | 10.x flat config | `@eslint/js` recommended + react-hooks + react-refresh |
+| Tests | `node:test` | Built into Node; no test framework is installed |
 
-No TypeScript, no test runner, no CI configuration, and no state-management library —
-state is local `useState`/`useEffect` inside `App.jsx`.
+Function components with `React.Component` used only for the error boundary. No
+TypeScript, no CI configuration, and no state-management library — state is local
+`useState`/`useEffect` inside `App.jsx`.
 
 ---
 
 ## Getting started
 
-Prerequisites: **Node.js 18+** and npm. A running Heartbeat backend is needed for real
-data.
+Prerequisites: **Node.js 20.19+** and npm — Vite 8 and ESLint 10 both dropped Node 18, so
+the older floor the previous README quoted will not install. A running Heartbeat backend
+is needed for real data.
 
 ```bash
 cd heartbeat-frontend
@@ -188,6 +201,7 @@ npm run dev               # http://localhost:5173
 | `npm run build` | Production build into `dist/` |
 | `npm run preview` | Serve the built bundle locally |
 | `npm run lint` | ESLint over the project |
+| `npm test` | Alert-engine test suite (`node --test`, no dependencies) |
 
 ### Configuration
 
@@ -212,7 +226,7 @@ Everything the frontend calls, all defined in `src/api.js`:
 | --- | --- | --- |
 | `POST` | `/api/login` | Sign in or sign up; returns `{ id, name, token }`, `401` on wrong password |
 | `POST` | `/api/logout` | Best-effort session teardown (failures ignored) |
-| `GET` | `/api/history?limit&offset&since&until` | Reading history |
+| `GET` | `/api/history?limit&until&since&type&abnormal_only&min_confidence` | Reading history. `until` doubles as the paging cursor; `offset` is no longer used. |
 | `GET` | `/api/stats` | Total beats, abnormal beats, counts by class |
 | `GET` | `/api/latest` | Most recent reading |
 | `GET` | `/api/trends?points` | Heart-rate series, class distribution, alert distribution |
@@ -261,21 +275,38 @@ light theme.
 
 ---
 
+## Testing
+
+```bash
+npm test
+```
+
+`src/alerts.test.js` covers the alert engine — 30 cases over the five levels, the
+precedence of `uncertain` over escalation, threshold boundaries, window bounds,
+caller-supplied thresholds, and the invariant that a confident normal beat is never
+reported as urgent. It uses `node:test`, so it runs on a bare checkout with nothing
+installed. The React components have no tests.
+
 ## Known limitations
 
-- **Load older ignores the date filters.** Paging past the first 200 rows refetches
-  without `since`/`until`, so older pages are not date-bounded.
-- **Mixed filtering.** Date filtering happens server-side, while type / confidence /
-  abnormal-only filter only the rows already loaded — so counts reflect the loaded
-  window, not the full dataset.
 - **Optimistic stats.** Live beats increment local counters without re-fetching
   `/api/stats`, so totals can drift from the server until reload.
-- **Token in query strings.** CSV/PDF downloads put the session token in the URL, where
-  it can land in server logs or browser history.
-- **`ALERT_RANK` is exported but unused** by the current UI; it exists for sorting or
+- **Token in query strings.** The WebSocket upgrade and the CSV/PDF downloads put the
+  session token in the URL, where it can land in server logs or browser history. The
+  browser WebSocket API cannot send headers; the downloads could use a `blob:` fetch or
+  a short-lived one-time token instead.
+- **Live beats are filtered client-side.** Rows fetched from the server honour every
+  filter, but beats arriving over the socket are matched against the filters in the
+  browser, so the counts shown reflect what has been loaded rather than a server-side
+  total.
+- **Reconnects have no backoff.** The socket retries every 2 seconds indefinitely,
+  except after an auth rejection.
+- **Trends poll while hidden.** The 5-second poll keeps running in a background tab.
+- **`ALERT_RANK` is exported but unused** by the UI; it exists for sorting or
   "highest alert in the last hour" style features.
 - **Unreferenced assets** remain in `public/icons.svg` and `src/assets/`.
-- **No tests.** `alerts.js` is written to be testable, but no runner is configured.
+- **`App.jsx` is ~980 lines** holding four screens plus socket, polling and filter
+  state; it is the obvious next refactor.
 
 ---
 

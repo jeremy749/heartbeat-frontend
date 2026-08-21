@@ -156,6 +156,32 @@ describe('evaluateAlert · a confident normal beat is never urgent', () => {
   })
 })
 
+describe('evaluateAlert · what the engine keys off', () => {
+  it('classifies on `classification`, not on the is_abnormal flag', () => {
+    // The table renders is_abnormal; the engine deliberately does not trust it,
+    // so a mislabelled flag cannot manufacture an alert.
+    const b = normal({ is_abnormal: true })
+    assert.equal(evaluateAlert(b, [b]).level, 'green')
+  })
+
+  it('does not escalate a classification it does not recognise', () => {
+    const b = beat({ classification: 'Paced', confidence: 0.95 })
+    assert.equal(evaluateAlert(b, [b]).level, 'green')
+  })
+
+  it('ignores rate flags on a beat it is not confident about', () => {
+    // Uncertainty is checked first: an unreliable class must not be escalated
+    // to "urgent" just because a flag rode along with it.
+    const b = ventricular({ confidence: 0.3, flags: ['TACHY'] })
+    assert.equal(evaluateAlert(b, [b]).level, 'uncertain')
+  })
+
+  it('works with no history at all', () => {
+    assert.equal(evaluateAlert(ventricular({ confidence: 0.9 }), []).level, 'red')
+    assert.equal(evaluateAlert(supraventricular({ confidence: 0.9 }), []).level, 'amber')
+  })
+})
+
 describe('evaluateAlert · window bounds', () => {
   it('ignores abnormal beats that have fallen out of the window', () => {
     const b = normal()
