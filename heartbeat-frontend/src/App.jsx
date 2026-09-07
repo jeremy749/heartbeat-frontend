@@ -31,6 +31,19 @@ import {
   wsUrl,
 } from './api'
 import { evaluateAlert } from './alerts'
+import {
+  HISTORY_PAGE,
+  LOAD_MORE_PAGE,
+  applyBeatToStats,
+  filterReadings,
+  hasActiveFilters,
+  historyQuery,
+  isLastPage,
+  liveHistoryCap,
+  newRows,
+  oldestTimestamp,
+  readingKey,
+} from './history.js'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import './App.css'
 
@@ -43,10 +56,6 @@ const generatePoint = (index, phase) => {
 }
 const INITIAL_POINTS = 60
 const STREAM_IDLE_MS = 10000 // no beat for this long => not "streaming"
-const HISTORY_PAGE = 200 // rows fetched for the history table
-const LOAD_MORE_PAGE = 50 // rows added per "Load older"
-// Ceiling on rows held in memory once the user has paged back through history.
-const HISTORY_HARD_CAP = 2000
 // Unfiltered recent beats kept for the alert engine. The alert must reflect the
 // real rhythm, never whatever the history tab happens to be filtered to.
 const ALERT_WINDOW = 25
@@ -96,38 +105,6 @@ function InfoDot({ text }) {
   )
 }
 
-// Stable identity for a reading, used for React keys and for de-duplicating
-// pages that overlap on their boundary timestamp.
-const readingKey = (r) => r.id ?? r.recorded_at
-
-// Oldest recorded_at in a set of readings, or null when there are none. Parsed
-// rather than string-compared so mixed ISO offsets still order correctly.
-const oldestTimestamp = (rows) => {
-  let oldest = null
-  let oldestMs = Infinity
-  for (const r of rows) {
-    const at = Date.parse(r.recorded_at)
-    if (!Number.isNaN(at) && at < oldestMs) {
-      oldestMs = at
-      oldest = r.recorded_at
-    }
-  }
-  return oldest
-}
-
-const applyBeatToStats = (prev, beat) => {
-  const base = prev || { total_beats: 0, abnormal_beats: 0, counts_by_class: {} }
-  const counts = { ...base.counts_by_class }
-  counts[beat.classification] = (counts[beat.classification] || 0) + 1
-  return {
-    total_beats: base.total_beats + 1,
-    abnormal_beats: base.abnormal_beats + (beat.is_abnormal ? 1 : 0),
-    counts_by_class: counts,
-    latest_bpm: beat.bpm,
-    latest_classification: beat.classification,
-  }
-}
-
 const buildAlert = (latest, history) => {
   if (!latest) return { level: 'none', label: 'No data', detail: 'Waiting for the first beat.' }
   if (latest.alert_level) {
@@ -141,7 +118,7 @@ const buildAlert = (latest, history) => {
 }
 
 // ── Sign-in screen ────────────────────────────────────────────────────────────
-function LoginScreen({ onSignedIn }) {
+function LoginScreen({ onSignedIn, notice }) {
   const [name, setName] = useState('Demo User')
   const [password, setPassword] = useState('demo')
   const [busy, setBusy] = useState(false)
@@ -181,6 +158,11 @@ function LoginScreen({ onSignedIn }) {
           <span className="brand-name">Heartbeat</span>
         </div>
         <h1 className="login-title">Sign in</h1>
+        {notice && (
+          <p className="login-notice" role="status">
+            {notice}
+          </p>
+        )}
         <p className="login-sub">New name? The password you enter becomes that account's password.</p>
         <input
           className="login-input"
@@ -256,6 +238,15 @@ function TrendsView({ trends, strip, error }) {
           <h2 className="panel-title">ECG strip</h2>
           <span className="panel-meta">last {strip?.beats ?? 0} beats</span>
         </div>
+        {stripData.length === 0 ? (
+          // Retention nulls the raw samples after 24 hours, so a user who has
+          // not recorded in a day gets an empty strip. Say why rather than
+          // drawing an empty chart.
+          <p className="panel-note">
+            No waveform to show. Raw ECG samples are kept for 24 hours — older readings
+            keep their classification and heart rate, but not the trace.
+          </p>
+        ) : (
         <div className="waveform">
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={stripData} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
@@ -271,6 +262,7 @@ function TrendsView({ trends, strip, error }) {
             </LineChart>
           </ResponsiveContainer>
         </div>
+        )}
       </section>
 
       <div className="metrics">
@@ -453,7 +445,7 @@ function AccountView({ onSignOut }) {
 }
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
-function Dashboard({ user, onSignOut, justCreated }) {
+function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   const userId = user.id
   const [page, setPage] = useState('dashboard')
   const [connection, setConnection] = useState('connecting')
@@ -490,23 +482,14 @@ function Dashboard({ user, onSignOut, justCreated }) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
-  // Convert a yyyy-mm-dd input into an ISO timestamp bound (start/end of day).
-  const since = dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined
-  const until = dateTo ? new Date(`${dateTo}T23:59:59`).toISOString() : undefined
-
-  // Every filter the server understands, in one object. The table, "Load older"
-  // and the CSV export all send exactly this, so the export can never contain
-  // rows the table never showed.
-  const historyParams = useMemo(
-    () => ({
-      type: filterType === 'All' ? undefined : filterType,
-      abnormal_only: abnormalOnly || undefined,
-      min_confidence: minConfidence || undefined,
-      since,
-      until,
-    }),
-    [filterType, abnormalOnly, minConfidence, since, until],
+  const filters = useMemo(
+    () => ({ filterType, abnormalOnly, minConfidence, dateFrom, dateTo }),
+    [filterType, abnormalOnly, minConfidence, dateFrom, dateTo],
   )
+
+  // The one query the table, "Load older" and the CSV export all send, so the
+  // export can never contain rows the table never showed. See history.js.
+  const historyParams = useMemo(() => historyQuery(filters), [filters])
 
   // Identity of the current query, including a manual retry.
   const historyKey = useMemo(
@@ -518,12 +501,12 @@ function Dashboard({ user, onSignOut, justCreated }) {
 
   const wsRef = useRef(null)
   const simRef = useRef(null)
-  // Held in a ref so the socket effect can sign out without listing onSignOut
-  // as a dependency - its identity changes on every parent render, which would
-  // tear down and reopen the socket continuously.
-  const signOutRef = useRef(onSignOut)
+  // Held in a ref so the socket effect can end the session without listing the
+  // callback as a dependency - its identity changes on every parent render,
+  // which would tear down and reopen the socket continuously.
+  const expiredRef = useRef(onSessionExpired)
   useEffect(() => {
-    signOutRef.current = onSignOut
+    expiredRef.current = onSessionExpired
   })
 
   // Advance the clock so the "streaming vs waiting" label stays honest.
@@ -635,7 +618,7 @@ function Dashboard({ user, onSignOut, justCreated }) {
           // paged back through history, a single live beat must not throw
           // those loaded pages away.
           setHistory((prev) =>
-            [beat, ...prev].slice(0, Math.min(HISTORY_HARD_CAP, Math.max(HISTORY_PAGE, prev.length + 1))),
+            [beat, ...prev].slice(0, liveHistoryCap(prev.length)),
           )
           setStats((prev) => applyBeatToStats(prev, beat))
           if (Array.isArray(msg.samples) && msg.samples.length) {
@@ -649,9 +632,10 @@ function Dashboard({ user, onSignOut, justCreated }) {
         if (stopped) return
         setConnection('offline')
         if (WS_AUTH_CLOSE_CODES.has(event.code)) {
-          // The server rejected our token. Retrying cannot fix that.
+          // The server rejected our token. Retrying cannot fix that, and the
+          // user deserves to know why they are back at the sign-in screen.
           stopped = true
-          signOutRef.current()
+          expiredRef.current()
           return
         }
         reconnectTimer = setTimeout(connect, 2000)
@@ -707,27 +691,11 @@ function Dashboard({ user, onSignOut, justCreated }) {
     { label: 'Signal', value: signalLabel, sub: connection === 'live' ? 'backend connected' : 'backend offline' },
   ]
 
-  // The server already applied these filters to what it sent. This second pass
-  // exists only for beats that arrive live over the socket, which bypass it.
-  const filteredHistory = useMemo(() => {
-    const minC = minConfidence ? parseFloat(minConfidence) : 0
-    const sinceMs = since ? Date.parse(since) : null
-    const untilMs = until ? Date.parse(until) : null
-    return history.filter((r) => {
-      if (filterType !== 'All' && r.classification !== filterType) return false
-      if (abnormalOnly && !r.is_abnormal) return false
-      if ((r.confidence || 0) < minC) return false
-      const at = Date.parse(r.recorded_at)
-      if (sinceMs != null && at < sinceMs) return false
-      if (untilMs != null && at > untilMs) return false
-      return true
-    })
-  }, [history, filterType, abnormalOnly, minConfidence, since, until])
+  const filteredHistory = useMemo(() => filterReadings(history, filters), [history, filters])
 
   const exportHref = exportUrl(historyParams)
 
-  const hasFilters =
-    filterType !== 'All' || abnormalOnly || minConfidence !== '' || dateFrom !== '' || dateTo !== ''
+  const hasFilters = hasActiveFilters(filters)
 
   // Page by timestamp, not by offset. Beats keep being recorded while the user
   // reads, and every new row shifts an offset-based window by one - which
@@ -745,14 +713,9 @@ function Dashboard({ user, onSignOut, justCreated }) {
     fetchHistory({ ...historyParams, limit: LOAD_MORE_PAGE, until: oldest })
       .then((older) => {
         const rows = Array.isArray(older) ? older : []
-        // `until` is inclusive, so the boundary row comes back with the page.
-        const seen = new Set(history.map(readingKey))
-        const added = rows.filter((r) => !seen.has(readingKey(r)))
+        const added = newRows(history, rows)
         if (added.length) setHistory((prev) => [...prev, ...added])
-        setHistoryResult({
-          key,
-          allLoaded: added.length === 0 || rows.length < LOAD_MORE_PAGE,
-        })
+        setHistoryResult({ key, allLoaded: isLastPage(added, rows) })
         setLoadingMore(false)
       })
       .catch((err) => {
@@ -1038,8 +1001,11 @@ function App() {
   // Set the token synchronously (before any child data fetch runs).
   if (user?.token) setAuthToken(user.token)
 
-  const signOut = () => {
-    apiLogout()
+  // Message carried onto the sign-in screen, so a session that ended on its own
+  // says so instead of just dumping the user back at the login form.
+  const [notice, setNotice] = useState('')
+
+  const clearSession = () => {
     setAuthToken(null)
     try {
       localStorage.removeItem(USER_KEY)
@@ -1049,18 +1015,33 @@ function App() {
     setUser(null)
   }
 
+  const signOut = () => {
+    apiLogout()
+    setNotice('')
+    clearSession()
+  }
+
+  // The token expired or was rejected. Don't call /api/logout with a credential
+  // the server has already refused - just clear it and explain.
+  const expireSession = () => {
+    setNotice('Your session expired. Please sign in again.')
+    clearSession()
+  }
+
   // Whether this sign-in created the account. Session-only, so it is state
   // here rather than part of the stored user.
   const [justCreated, setJustCreated] = useState(false)
 
-  // If the server ever rejects our token (e.g. database reset), sign out.
+  // If the server ever rejects our token (expiry, or a database reset), sign out
+  // with an explanation.
   useEffect(() => {
-    setAuthErrorHandler(signOut)
+    setAuthErrorHandler(expireSession)
   }, [])
 
   if (!user) {
     return (
       <LoginScreen
+        notice={notice}
         onSignedIn={({ created, ...u }) => {
           setAuthToken(u.token)
           try {
@@ -1077,7 +1058,14 @@ function App() {
     )
   }
 
-  return <Dashboard user={user} onSignOut={signOut} justCreated={justCreated} />
+  return (
+    <Dashboard
+      user={user}
+      onSignOut={signOut}
+      onSessionExpired={expireSession}
+      justCreated={justCreated}
+    />
+  )
 }
 
 export default App
