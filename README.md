@@ -37,6 +37,7 @@ The Git repository root is a thin wrapper; the whole application lives in the
         ├── api.js                REST client, auth token, WebSocket URL
         ├── alerts.js             pure alert-evaluation logic (no React)
         ├── alerts.test.js        alert-engine test suite (node:test)
+        ├── api.test.js           REST client tests, incl. throttled sign-in (node:test)
         ├── ErrorBoundary.jsx     catches render errors so a panel fails, not the page
         ├── index.css             theme tokens + reset
         ├── App.css               component styling
@@ -182,9 +183,10 @@ TypeScript, no CI configuration, and no state-management library — state is lo
 
 ## Getting started
 
-Prerequisites: **Node.js 20.19+** and npm — Vite 8 and ESLint 10 both dropped Node 18, so
-the older floor the previous README quoted will not install. A running Heartbeat backend
-is needed for real data.
+Prerequisites: **Node.js 22+** and npm. Vite 8 and ESLint 10 dropped Node 18, and the
+test script globs its files, which `node --test` only supports from Node 21 — on Node 20
+it tries to load `src` as a module and fails. Node 20 is end-of-life anyway. A running
+Heartbeat backend is needed for real data.
 
 ```bash
 cd heartbeat-frontend
@@ -201,7 +203,7 @@ npm run dev               # http://localhost:5173
 | `npm run build` | Production build into `dist/` |
 | `npm run preview` | Serve the built bundle locally |
 | `npm run lint` | ESLint over the project |
-| `npm test` | Alert-engine test suite (`node --test`, no dependencies) |
+| `npm test` | Alert-engine and API-client tests (`node --test`, no dependencies) |
 
 ### Configuration
 

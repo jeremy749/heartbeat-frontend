@@ -160,7 +160,10 @@ function LoginScreen({ onSignedIn }) {
       setError(
         err.message === 'UNAUTHORIZED'
           ? 'Wrong password for that name.'
-          : 'Could not reach the server. Is it running?',
+          : err.message === 'RATE_LIMITED'
+            ? err.detail ||
+              `Too many failed attempts. Try again in ${err.retryAfter || 60}s.`
+            : 'Could not reach the server. Is it running?',
       )
       setBusy(false)
     }
@@ -456,12 +459,15 @@ function Dashboard({ user, onSignOut, justCreated }) {
   const [connection, setConnection] = useState('connecting')
 
   const [history, setHistory] = useState([])
-  const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState(null)
   const [historyReloads, setHistoryReloads] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState(null)
-  const [allLoaded, setAllLoaded] = useState(false)
+  // Which query the rows in `history` answer, and whether it reached the end.
+  // Loading is derived from this rather than set at the top of the effect, so
+  // changing a filter does not need a synchronous state write to show a
+  // spinner - and stale rows can never be labelled as loaded.
+  const [historyResult, setHistoryResult] = useState({ key: null, allLoaded: false })
   const [summaryError, setSummaryError] = useState(null)
   const [trendsError, setTrendsError] = useState(null)
   const [recentBeats, setRecentBeats] = useState([])
@@ -473,7 +479,10 @@ function Dashboard({ user, onSignOut, justCreated }) {
     Array.from({ length: INITIAL_POINTS }, (_, i) => generatePoint(i, 0)),
   )
   const [lastBeatAt, setLastBeatAt] = useState(0)
-  const [, setTick] = useState(0)
+  // The "streaming vs waiting" label depends on the current time. Reading the
+  // clock during render makes the component non-idempotent, so the clock lives
+  // in state and the interval below advances it.
+  const [now, setNow] = useState(() => Date.now())
 
   const [filterType, setFilterType] = useState('All')
   const [abnormalOnly, setAbnormalOnly] = useState(false)
@@ -499,6 +508,14 @@ function Dashboard({ user, onSignOut, justCreated }) {
     [filterType, abnormalOnly, minConfidence, since, until],
   )
 
+  // Identity of the current query, including a manual retry.
+  const historyKey = useMemo(
+    () => JSON.stringify([userId, historyParams, historyReloads]),
+    [userId, historyParams, historyReloads],
+  )
+  const historyLoading = historyResult.key !== historyKey
+  const allLoaded = !historyLoading && historyResult.allLoaded
+
   const wsRef = useRef(null)
   const simRef = useRef(null)
   // Held in a ref so the socket effect can sign out without listing onSignOut
@@ -509,9 +526,9 @@ function Dashboard({ user, onSignOut, justCreated }) {
     signOutRef.current = onSignOut
   })
 
-  // Periodic re-render so the "streaming vs waiting" label stays honest.
+  // Advance the clock so the "streaming vs waiting" label stays honest.
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 2000)
+    const id = setInterval(() => setNow(Date.now()), 2000)
     return () => clearInterval(id)
   }, [])
 
@@ -519,41 +536,41 @@ function Dashboard({ user, onSignOut, justCreated }) {
   // server's job and the table matches the CSV export row for row.
   useEffect(() => {
     let cancelled = false
-    setAllLoaded(false)
-    setHistoryLoading(true)
-    setHistoryError(null)
-    setLoadMoreError(null)
     fetchHistory({ ...historyParams, limit: HISTORY_PAGE })
       .then((h) => {
         if (cancelled) return
         const rows = Array.isArray(h) ? h : []
         setHistory(rows)
+        setHistoryError(null)
+        setLoadMoreError(null)
         // A short first page means there is nothing older to ask for, so don't
         // offer a "Load older" that can only come back empty.
-        setAllLoaded(rows.length < HISTORY_PAGE)
-        setHistoryLoading(false)
+        setHistoryResult({ key: historyKey, allLoaded: rows.length < HISTORY_PAGE })
       })
       .catch((err) => {
         if (cancelled) return
-        setHistoryLoading(false)
+        // Mark the query settled either way, or the table stays on its spinner.
+        setHistoryResult({ key: historyKey, allLoaded: false })
         // A 401 already signs the user out; don't also shout about it.
         if (err.message !== 'UNAUTHORIZED') setHistoryError('Could not load readings.')
       })
     return () => {
       cancelled = true
     }
-  }, [userId, historyParams, historyReloads])
+  }, [historyKey, historyParams])
 
   // Summary data plus the unfiltered beat window the alert engine runs on.
   useEffect(() => {
     let cancelled = false
-    setSummaryError(null)
     Promise.all([fetchStats(), fetchLatest(), fetchHistory({ limit: ALERT_WINDOW })])
       .then(([s, l, recent]) => {
         if (cancelled) return
         setStats(s)
         setLatest(l)
         setRecentBeats(Array.isArray(recent) ? recent : [])
+        // Cleared on success, not before the request - an error stays visible
+        // until something actually replaces it.
+        setSummaryError(null)
       })
       .catch((err) => {
         if (cancelled || err.message === 'UNAUTHORIZED') return
@@ -680,7 +697,7 @@ function Dashboard({ user, onSignOut, justCreated }) {
   const currentBpm = latest?.bpm != null ? Math.round(latest.bpm) : '—'
   const currentClass = latest?.classification ?? 'No data'
 
-  const recentlyStreaming = lastBeatAt > 0 && Date.now() - lastBeatAt < STREAM_IDLE_MS
+  const recentlyStreaming = lastBeatAt > 0 && now - lastBeatAt < STREAM_IDLE_MS
   const signalLabel =
     connection !== 'live' ? 'Offline' : recentlyStreaming ? 'Streaming' : 'Waiting for data'
 
@@ -720,6 +737,9 @@ function Dashboard({ user, onSignOut, justCreated }) {
     if (loadingMore || allLoaded) return
     const oldest = oldestTimestamp(history)
     if (!oldest) return
+    // Pin the query these rows belong to, so a filter change mid-flight cannot
+    // mark the new query loaded.
+    const key = historyKey
     setLoadingMore(true)
     setLoadMoreError(null)
     fetchHistory({ ...historyParams, limit: LOAD_MORE_PAGE, until: oldest })
@@ -729,7 +749,10 @@ function Dashboard({ user, onSignOut, justCreated }) {
         const seen = new Set(history.map(readingKey))
         const added = rows.filter((r) => !seen.has(readingKey(r)))
         if (added.length) setHistory((prev) => [...prev, ...added])
-        setAllLoaded(added.length === 0 || rows.length < LOAD_MORE_PAGE)
+        setHistoryResult({
+          key,
+          allLoaded: added.length === 0 || rows.length < LOAD_MORE_PAGE,
+        })
         setLoadingMore(false)
       })
       .catch((err) => {

@@ -1,8 +1,10 @@
 // Central place for talking to the heartbeat-backend.
 // Override the URL at build time with VITE_API_URL (see .env.example).
 
+// import.meta.env is injected by Vite and absent under plain node, so this
+// module can be unit-tested outside a build.
 export const API_BASE =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000'
+  import.meta.env?.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000'
 
 const WS_ORIGIN = API_BASE.replace(/^http/, 'ws')
 
@@ -58,6 +60,21 @@ export async function login(name, password) {
     body: JSON.stringify({ name, password }),
   })
   if (res.status === 401) throw new Error('UNAUTHORIZED')
+  if (res.status === 429) {
+    // The server throttles repeated failures. Without this the caller would
+    // report it as the server being unreachable, which sends people off
+    // restarting a backend that is up and deliberately refusing them.
+    const err = new Error('RATE_LIMITED')
+    // Read the wait from the body: Retry-After is not a CORS-safelisted
+    // response header, so cross-origin it is only readable because the API
+    // explicitly exposes it, and the body carries the same number anyway.
+    err.detail = await res
+      .json()
+      .then((d) => d.detail)
+      .catch(() => null)
+    err.retryAfter = Number(res.headers.get('Retry-After')) || null
+    throw err
+  }
   if (!res.ok) throw new Error(`login -> ${res.status}`)
   return res.json()
 }
