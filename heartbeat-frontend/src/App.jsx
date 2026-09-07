@@ -541,6 +541,28 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     }
   }, [userId])
 
+  // Live beats increment the cached counters locally, which drifts from the
+  // server over a long session - a beat the socket delivered twice, a reading
+  // pruned server-side, another device on the same account. Re-ask periodically
+  // and whenever the tab comes back, so the totals cannot stay wrong.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden) return
+      // A failed background refresh just leaves the last known figures; the
+      // initial load owns the error message, and repeating it here would only
+      // flicker one on and off.
+      fetchStats()
+        .then(setStats)
+        .catch(() => {})
+    }
+    const id = setInterval(refresh, 60000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [userId])
+
   // Trends refresh while on the trends tab
   useEffect(() => {
     if (page !== 'trends') return

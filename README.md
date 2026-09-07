@@ -81,8 +81,12 @@ The Git repository root is a thin wrapper; the whole application lives in the
   defence in depth.
 - Each beat updates the latest reading, prepends to the history table, feeds an
   unfiltered 25-beat window used for alert evaluation, and increments the local stat
-  counters optimistically. The table holds 200 rows plus whatever the user has paged in,
-  up to a 2000-row ceiling.
+  counters optimistically. `/api/stats` is re-asked every 60 seconds and when the tab
+  regains focus, so those counters cannot drift indefinitely. The table holds 200 rows
+  plus whatever the user has paged in, up to a 2000-row ceiling.
+- The trace is marked as demo based on where its points came from, not on socket state —
+  a connected backend that has not sent a beat yet is still showing synthetic data, and
+  says so.
 - The connection pill shows `Live` / `Connecting` / `Offline · demo`. A separate signal
   readout distinguishes `Streaming` from `Waiting for data` — if no beat arrives for
   10 seconds (`STREAM_IDLE_MS`) the label stops claiming a live feed.
@@ -340,8 +344,9 @@ background so it is cached by the time a dashboard needs it.
 
 ## Known limitations
 
-- **Optimistic stats.** Live beats increment local counters without re-fetching
-  `/api/stats`, so totals can drift from the server until reload.
+- **Optimistic stats between refreshes.** Live beats increment local counters, and
+  `/api/stats` is only re-asked every 60 seconds and when the tab regains focus, so the
+  totals can be briefly ahead of the server.
 - **Token in query strings.** The WebSocket upgrade and the CSV/PDF downloads put the
   session token in the URL, where it can land in server logs or browser history. The
   browser WebSocket API cannot send headers; the downloads could use a `blob:` fetch or
