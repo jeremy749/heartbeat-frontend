@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClassDistributionChart, EcgChart, HeartRateChart } from './LazyChart.jsx'
 import { preloadCharts } from './chartLoader.js'
 import {
+  API_BASE,
   WS_AUTH_CLOSE_CODES,
   changePassword as apiChangePassword,
   deleteAccount as apiDeleteAccount,
@@ -27,12 +28,15 @@ import {
   LOAD_MORE_PAGE,
   applyBeatToStats,
   filterReadings,
+  dateRangeError,
   hasActiveFilters,
   historyQuery,
   isLastPage,
   liveHistoryCap,
   newRows,
+  PRESET_RANGES,
   oldestTimestamp,
+  presetRange,
   readingKey,
 } from './history.js'
 import ErrorBoundary from './ErrorBoundary.jsx'
@@ -417,6 +421,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   // spinner - and stale rows can never be labelled as loaded.
   const [historyResult, setHistoryResult] = useState({ key: null, allLoaded: false })
   const [summaryError, setSummaryError] = useState(null)
+  const [summaryLoaded, setSummaryLoaded] = useState(false)
   const [trendsError, setTrendsError] = useState(null)
   const [recentBeats, setRecentBeats] = useState([])
   const [stats, setStats] = useState(null)
@@ -452,8 +457,11 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     () => JSON.stringify([userId, historyParams, historyReloads]),
     [userId, historyParams, historyReloads],
   )
-  const historyLoading = historyResult.key !== historyKey
-  const allLoaded = !historyLoading && historyResult.allLoaded
+  // An impossible date range is never sent to the server, so the query never
+  // settles - derive around it rather than faking a completed fetch.
+  const rangeError = dateRangeError(filters)
+  const historyLoading = !rangeError && historyResult.key !== historyKey
+  const allLoaded = Boolean(rangeError) || (!historyLoading && historyResult.allLoaded)
 
   const wsRef = useRef(null)
   const simRef = useRef(null)
@@ -475,6 +483,10 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   // server's job and the table matches the CSV export row for row.
   useEffect(() => {
     let cancelled = false
+    // An impossible range can only come back empty, so don't ask. The table
+    // reads the error straight off the filters, so nothing has to be recorded
+    // here for it to render.
+    if (dateRangeError({ dateFrom, dateTo })) return undefined
     fetchHistory({ ...historyParams, limit: HISTORY_PAGE })
       .then((h) => {
         if (cancelled) return
@@ -496,7 +508,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     return () => {
       cancelled = true
     }
-  }, [historyKey, historyParams])
+  }, [historyKey, historyParams, dateFrom, dateTo])
 
   // Summary data plus the unfiltered beat window the alert engine runs on.
   useEffect(() => {
@@ -510,10 +522,12 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
         // Cleared on success, not before the request - an error stays visible
         // until something actually replaces it.
         setSummaryError(null)
+        setSummaryLoaded(true)
       })
       .catch((err) => {
         if (cancelled || err.message === 'UNAUTHORIZED') return
         setSummaryError('Could not load your latest readings — figures may be stale.')
+        setSummaryLoaded(true)
       })
     return () => {
       cancelled = true
@@ -663,6 +677,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
 
   const hasFilters = hasActiveFilters(filters)
 
+
   // Page by timestamp, not by offset. Beats keep being recorded while the user
   // reads, and every new row shifts an offset-based window by one - which
   // silently duplicates rows at the seam and skips others entirely. Asking for
@@ -691,6 +706,11 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   }
 
   const retryHistory = () => setHistoryReloads((n) => n + 1)
+
+  // Nothing has ever been recorded for this account. Distinct from "the backend
+  // is down" - the guidance is only useful once we know the answer is really
+  // "you have no data", not "we could not ask".
+  const noReadingsYet = summaryLoaded && !latest && (stats?.total_beats ?? 0) === 0
 
   const connectionLabel =
     connection === 'live' ? 'Live' : connection === 'connecting' ? 'Connecting' : 'Offline · demo'
@@ -800,6 +820,38 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
             </div>
           </section>
 
+          {noReadingsYet && (
+            // A new account lands here, not on History, so the setup steps have
+            // to be here too - otherwise the first thing anyone sees is a demo
+            // trace scrolling with no explanation of where real data comes from.
+            <section className="panel setup-panel">
+              <div className="panel-head">
+                <h2 className="panel-title">No readings yet — connect a device</h2>
+              </div>
+              <p className="setup-intro">
+                This dashboard shows beats recorded by the Heartbeat backend. Nothing has
+                arrived for this account yet, so the trace below is a demo, not you.
+              </p>
+              <ol className="setup-steps">
+                <li>
+                  Make sure the backend is running and reachable at <code>{API_BASE}</code>.
+                </li>
+                <li>
+                  Set <code>HEARTBEAT_DEVICE_KEY</code> in the backend environment, and give
+                  the same key to the device.
+                </li>
+                <li>
+                  Start the bridge: <code>python device_bridge.py</code> — or
+                  <code>python device_bridge.py --demo</code> to replay sample data if you
+                  don&apos;t have the hardware to hand.
+                </li>
+              </ol>
+              <p className="setup-outro">
+                Readings appear here the moment the first beat arrives — no reload needed.
+              </p>
+            </section>
+          )}
+
           <section className="panel">
             <div className="panel-head">
               <h2 className="panel-title">Latest beat</h2>
@@ -812,10 +864,11 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
               height={300}
               strokeWidth={2}
               cursor
+              demo={connection !== 'live'}
               label={
                 connection === 'live'
                   ? 'Live ECG waveform'
-                  : 'Simulated ECG waveform, shown while offline'
+                  : 'Demo trace, not real data — shown while the backend is offline'
               }
             />
           </section>
@@ -874,6 +927,37 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
                 <span>To</span>
                 <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
               </label>
+              <div className="filter filter-presets">
+                <span>Quick range</span>
+                <div className="preset-row">
+                  {PRESET_RANGES.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className="preset-btn"
+                      onClick={() => {
+                        const range = presetRange(name)
+                        setDateFrom(range.dateFrom)
+                        setDateTo(range.dateTo)
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                  {(dateFrom || dateTo) && (
+                    <button
+                      type="button"
+                      className="preset-btn"
+                      onClick={() => {
+                        setDateFrom('')
+                        setDateTo('')
+                      }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
               <label className="filter filter-check">
                 <input type="checkbox" checked={abnormalOnly} onChange={(e) => setAbnormalOnly(e.target.checked)} />
                 <span>Abnormal only</span>
@@ -895,7 +979,13 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
                 </tr>
               </thead>
               <tbody>
-                {historyLoading ? (
+                {rangeError ? (
+                  <tr>
+                    <td colSpan={4} className="empty empty-error">
+                      {rangeError}
+                    </td>
+                  </tr>
+                ) : historyLoading ? (
                   <tr>
                     <td colSpan={4} className="empty">
                       Loading readings…

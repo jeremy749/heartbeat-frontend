@@ -36,9 +36,26 @@ const MARGIN = { top: 12, right: 8, left: 0, bottom: 4 }
 
 // An ECG trace in millivolts. Used for both the live monitor and the stored
 // strip on the trends tab, which differ only in size and cursor.
-export function EcgChart({ data, height = 200, strokeWidth = 1.5, cursor = false, label }) {
+//
+// `demo` marks the trace as synthetic. In an app whose whole job is showing
+// whether a heart is beating abnormally, a fake rhythm that draws identically
+// to a real one is the single most dangerous thing on the screen - so the demo
+// trace is dashed, desaturated, and captioned over the plot itself rather than
+// relying on a pill in the corner that a glancing eye will never read.
+export function EcgChart({
+  data,
+  height = 200,
+  strokeWidth = 1.5,
+  cursor = false,
+  label,
+  demo = false,
+}) {
   return (
-    <div className="waveform" role="img" aria-label={label || 'ECG waveform'}>
+    <div
+      className={`waveform${demo ? ' waveform-demo' : ''}`}
+      role="img"
+      aria-label={label || 'ECG waveform'}
+    >
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data} margin={MARGIN}>
           <CartesianGrid stroke="var(--grid)" strokeDasharray="2 6" vertical={false} />
@@ -47,19 +64,23 @@ export function EcgChart({ data, height = 200, strokeWidth = 1.5, cursor = false
           <Tooltip
             cursor={cursor ? { stroke: 'var(--trace)', strokeOpacity: 0.3 } : undefined}
             contentStyle={TOOLTIP_STYLE}
-            formatter={(value) => [`${Number(value).toFixed(2)} mV`, 'ECG']}
+            formatter={(value) => [`${Number(value).toFixed(2)} mV`, demo ? 'Demo' : 'ECG']}
             labelFormatter={() => ''}
           />
           <Line
             type="monotone"
             dataKey="value"
-            stroke="var(--trace)"
-            strokeWidth={strokeWidth}
+            stroke={demo ? 'var(--text-faint)' : 'var(--trace)'}
+            strokeWidth={demo ? 1.5 : strokeWidth}
+            strokeDasharray={demo ? '6 5' : undefined}
             dot={false}
             isAnimationActive={false}
           />
         </LineChart>
       </ResponsiveContainer>
+      {demo && (
+        <p className="waveform-demo-badge">Demo trace — not your data</p>
+      )}
     </div>
   )
 }

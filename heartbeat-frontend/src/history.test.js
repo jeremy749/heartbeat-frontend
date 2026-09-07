@@ -17,7 +17,11 @@ import {
   dayBounds,
   filterReadings,
   hasActiveFilters,
+  PRESET_RANGES,
+  dateRangeError,
   historyQuery,
+  presetRange,
+  toDateInput,
   isLastPage,
   liveHistoryCap,
   newRows,
@@ -296,5 +300,87 @@ describe('applyBeatToStats', () => {
     const snapshot = structuredClone(prev)
     applyBeatToStats(prev, reading({ classification: 'Ventricular', is_abnormal: true }))
     assert.deepEqual(prev, snapshot)
+  })
+})
+
+describe('dateRangeError', () => {
+  it('accepts a normal range', () => {
+    assert.equal(dateRangeError({ dateFrom: '2026-01-01', dateTo: '2026-01-31' }), null)
+  })
+
+  it('accepts a single day', () => {
+    assert.equal(dateRangeError({ dateFrom: '2026-01-02', dateTo: '2026-01-02' }), null)
+  })
+
+  it('accepts a half-open range', () => {
+    assert.equal(dateRangeError({ dateFrom: '2026-01-02', dateTo: '' }), null)
+    assert.equal(dateRangeError({ dateFrom: '', dateTo: '2026-01-02' }), null)
+    assert.equal(dateRangeError({}), null)
+  })
+
+  it('rejects a backwards range', () => {
+    // Otherwise the server returns nothing and the table blames the filters,
+    // sending people looking for data that was never missing.
+    const msg = dateRangeError({ dateFrom: '2026-02-01', dateTo: '2026-01-01' })
+    assert.equal(typeof msg, 'string')
+    assert.match(msg, /after/i)
+  })
+})
+
+describe('toDateInput', () => {
+  it('formats a date as yyyy-mm-dd', () => {
+    assert.equal(toDateInput(new Date(2026, 0, 2)), '2026-01-02')
+  })
+
+  it('zero-pads single digits', () => {
+    assert.equal(toDateInput(new Date(2026, 8, 7)), '2026-09-07')
+  })
+
+  it('uses local time, not UTC', () => {
+    // toISOString() would roll this back a day anywhere west of UTC.
+    const lateEvening = new Date(2026, 5, 15, 23, 30)
+    assert.equal(toDateInput(lateEvening), '2026-06-15')
+  })
+})
+
+describe('presetRange', () => {
+  const today = new Date(2026, 8, 7) // 2026-09-07
+
+  it('covers a single day for Today', () => {
+    assert.deepEqual(presetRange('Today', today), {
+      dateFrom: '2026-09-07',
+      dateTo: '2026-09-07',
+    })
+  })
+
+  it('counts the last 7 days inclusive of today', () => {
+    assert.deepEqual(presetRange('Last 7 days', today), {
+      dateFrom: '2026-09-01',
+      dateTo: '2026-09-07',
+    })
+  })
+
+  it('counts the last 30 days inclusive of today', () => {
+    assert.deepEqual(presetRange('Last 30 days', today), {
+      dateFrom: '2026-08-09',
+      dateTo: '2026-09-07',
+    })
+  })
+
+  it('crosses month and year boundaries', () => {
+    assert.deepEqual(presetRange('Last 7 days', new Date(2027, 0, 3)), {
+      dateFrom: '2026-12-28',
+      dateTo: '2027-01-03',
+    })
+  })
+
+  it('clears the range for an unknown preset', () => {
+    assert.deepEqual(presetRange('Nonsense', today), { dateFrom: '', dateTo: '' })
+  })
+
+  it('never produces a range the validator rejects', () => {
+    for (const name of PRESET_RANGES) {
+      assert.equal(dateRangeError(presetRange(name, today)), null, name)
+    }
   })
 })

@@ -56,6 +56,44 @@ export const historyQuery = (filters = {}) => {
   }
 }
 
+// A backwards range is a typo, not a query. Left unchecked the server dutifully
+// returns nothing and the table says "no readings match these filters", which
+// sends people hunting for missing data that was never missing.
+export const dateRangeError = ({ dateFrom, dateTo } = {}) =>
+  dateFrom && dateTo && dateFrom > dateTo
+    ? 'The "from" date is after the "to" date — no readings can fall in that range.'
+    : null
+
+// yyyy-mm-dd for a Date, in local time. toISOString() would shift the day for
+// anyone west of UTC, which is exactly the bug this avoids.
+export const toDateInput = (date) => {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+// Date-input values for the common ranges, so the usual case is one click
+// rather than two pickers.
+export const PRESET_RANGES = ['Today', 'Last 7 days', 'Last 30 days']
+
+export const presetRange = (name, today = new Date()) => {
+  const end = toDateInput(today)
+  const back = (days) => {
+    const d = new Date(today)
+    d.setDate(d.getDate() - days)
+    return toDateInput(d)
+  }
+  switch (name) {
+    case 'Today':
+      return { dateFrom: end, dateTo: end }
+    case 'Last 7 days':
+      return { dateFrom: back(6), dateTo: end } // inclusive of today
+    case 'Last 30 days':
+      return { dateFrom: back(29), dateTo: end }
+    default:
+      return { dateFrom: '', dateTo: '' }
+  }
+}
+
 export const hasActiveFilters = (filters = {}) =>
   Boolean(
     (filters.filterType && filters.filterType !== 'All') ||

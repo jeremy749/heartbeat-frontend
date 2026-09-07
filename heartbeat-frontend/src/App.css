@@ -280,6 +280,100 @@
   padding: 8px 4px;
 }
 
+/* ── Quick date ranges ────────────────────────────────────────────────────── */
+.filter-presets {
+  gap: 6px;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preset-btn {
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.preset-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ── First-run guidance ───────────────────────────────────────────────────── */
+.setup-panel {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, rgba(79, 156, 249, 0.07), transparent 60%), var(--surface);
+}
+
+.setup-intro,
+.setup-outro {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.92rem;
+}
+
+.setup-steps {
+  margin: 14px 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.setup-steps code {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+/* A synthetic trace must never be mistakable for a reading. The dashed,
+   desaturated line is set on the chart itself; this adds the hatched ground and
+   a caption sitting on the plot, so the distinction survives a glance. */
+.waveform-demo {
+  position: relative;
+  border-style: dashed;
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(138, 152, 173, 0.05) 0 10px,
+    transparent 10px 20px
+  );
+}
+
+.waveform-demo-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  padding: 7px 14px;
+  border: 1px dashed var(--text-faint);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* ── Metrics row ──────────────────────────────────────────────────────────── */
 .metrics {
   display: grid;
