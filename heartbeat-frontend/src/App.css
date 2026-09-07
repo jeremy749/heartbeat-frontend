@@ -737,6 +737,25 @@
   color: var(--red);
 }
 
+.panel-note {
+  margin: 0;
+  padding: 20px 16px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.login-notice {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 .retry-btn {
   margin-left: 8px;
   padding: 5px 12px;

@@ -37,6 +37,8 @@ The Git repository root is a thin wrapper; the whole application lives in the
         ├── api.js                REST client, auth token, WebSocket URL
         ├── alerts.js             pure alert-evaluation logic (no React)
         ├── alerts.test.js        alert-engine test suite (node:test)
+        ├── history.js            pure paging + filtering logic for the History tab
+        ├── history.test.js       history-logic test suite (node:test)
         ├── api.test.js           REST client tests, incl. throttled sign-in (node:test)
         ├── ErrorBoundary.jsx     catches render errors so a panel fails, not the page
         ├── index.css             theme tokens + reset
@@ -52,6 +54,8 @@ The Git repository root is a thin wrapper; the whole application lives in the
 | `src/api.js` | ~111 | `API_BASE` / `wsUrl()` derivation, in-memory bearer token, 401 handling, and one thin function per backend endpoint. |
 | `src/alerts.js` | ~73 | `evaluateAlert()`, the tunable `ALERT_THRESHOLDS`, and `ALERT_RANK`. Pure functions, framework-free, unit-testable, and portable to the backend later. |
 | `src/alerts.test.js` | ~242 | 30 cases over `evaluateAlert()` — levels, precedence, threshold boundaries, window bounds, and the "a confident normal beat is never urgent" invariant. |
+| `src/history.js` | ~121 | Paging and filtering for the History tab: `historyQuery()`, `filterReadings()`, `newRows()`, `isLastPage()`, `liveHistoryCap()`, `applyBeatToStats()`. Pure, so it is testable without a DOM. |
+| `src/history.test.js` | ~300 | Covers that logic, including the two paging regressions: offset drift and live beats truncating loaded pages. |
 | `src/ErrorBoundary.jsx` | ~35 | Class-component boundary. Returns children untouched when healthy, so it adds no DOM and no layout change. |
 | `src/index.css` | ~82 | CSS custom properties: dark clinical surfaces, semantic alert colors, ECG trace green, fonts, radius, shadow. |
 | `src/App.css` | ~816 | ~125 component classes — nav, alert banner, panels, metric cards, charts, tables, filters, forms. |
@@ -176,7 +180,7 @@ This is deliberately simple project-grade auth, not production security.
 | Tests | `node:test` | Built into Node; no test framework is installed |
 
 Function components with `React.Component` used only for the error boundary. No
-TypeScript, no CI configuration, and no state-management library — state is local
+TypeScript and no state-management library — state is local
 `useState`/`useEffect` inside `App.jsx`.
 
 ---
@@ -283,11 +287,23 @@ light theme.
 npm test
 ```
 
-`src/alerts.test.js` covers the alert engine — 30 cases over the five levels, the
-precedence of `uncertain` over escalation, threshold boundaries, window bounds,
-caller-supplied thresholds, and the invariant that a confident normal beat is never
-reported as urgent. It uses `node:test`, so it runs on a bare checkout with nothing
-installed. The React components have no tests.
+Three suites, all `node:test` — no framework, no DOM, so they run on a bare checkout:
+
+- **`alerts.test.js`** — the alert engine: the five levels, the precedence of
+  `uncertain` over escalation, threshold boundaries, window bounds, caller-supplied
+  thresholds, and the invariant that a confident normal beat is never reported urgent.
+- **`history.test.js`** — paging and filtering: query construction (the table and the
+  CSV export must send the same filters), the client-side pass over live beats,
+  boundary-row de-duplication, last-page detection, and the row cap.
+- **`api.test.js`** — the REST client, including a throttled sign-in reported distinctly
+  from an unreachable server.
+
+The React components themselves are still untested; the logic worth covering was moved
+out of `App.jsx` into `alerts.js` and `history.js` precisely so it could be tested
+without a renderer. Rendering-level tests would need jsdom and a testing library.
+
+CI (`.github/workflows/ci.yml`) runs lint, tests and build on every push to `main` and
+every pull request.
 
 ## Known limitations
 
