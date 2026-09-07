@@ -428,9 +428,14 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   const [latest, setLatest] = useState(null)
   const [trends, setTrends] = useState(null)
   const [strip, setStrip] = useState(null)
-  const [waveform, setWaveform] = useState(() =>
-    Array.from({ length: INITIAL_POINTS }, (_, i) => generatePoint(i, 0)),
-  )
+  // Provenance travels with the points. Whether the trace is real is a fact
+  // about the data, not about the socket: a connected backend that has not sent
+  // a beat yet still leaves synthetic points on screen, and marking those as
+  // real is the exact failure the demo styling exists to prevent.
+  const [waveform, setWaveform] = useState(() => ({
+    demo: true,
+    points: Array.from({ length: INITIAL_POINTS }, (_, i) => generatePoint(i, 0)),
+  }))
   const [lastBeatAt, setLastBeatAt] = useState(0)
   // The "streaming vs waiting" label depends on the current time. Reading the
   // clock during render makes the component non-idempotent, so the clock lives
@@ -527,7 +532,9 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
       .catch((err) => {
         if (cancelled || err.message === 'UNAUTHORIZED') return
         setSummaryError('Could not load your latest readings — figures may be stale.')
-        setSummaryLoaded(true)
+        // Deliberately not marking the summary loaded: a failed fetch means we
+        // don't know whether this account has readings, and "connect a device"
+        // is the wrong thing to tell someone whose backend is simply down.
       })
     return () => {
       cancelled = true
@@ -601,7 +608,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
           )
           setStats((prev) => applyBeatToStats(prev, beat))
           if (Array.isArray(msg.samples) && msg.samples.length) {
-            setWaveform(msg.samples.map((value, x) => ({ x, value })))
+            setWaveform({ demo: false, points: msg.samples.map((value, x) => ({ x, value })) })
           }
         } catch {
           /* ignore malformed frames */
@@ -643,8 +650,14 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     simRef.current = setInterval(() => {
       phase += 0.25
       setWaveform((prev) => {
-        const nextX = prev.length ? prev[prev.length - 1].x + 1 : 0
-        return [...prev.slice(-(INITIAL_POINTS - 1)), generatePoint(nextX, phase)]
+        // Once the simulator writes, the trace is synthetic again - even if the
+        // points it is extending came from a real beat a moment ago.
+        const points = prev.demo ? prev.points : []
+        const nextX = points.length ? points[points.length - 1].x + 1 : 0
+        return {
+          demo: true,
+          points: [...points.slice(-(INITIAL_POINTS - 1)), generatePoint(nextX, phase)],
+        }
       })
     }, 100)
     return () => {
@@ -860,15 +873,15 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
               </span>
             </div>
             <EcgChart
-              data={waveform}
+              data={waveform.points}
               height={300}
               strokeWidth={2}
               cursor
-              demo={connection !== 'live'}
+              demo={waveform.demo}
               label={
-                connection === 'live'
-                  ? 'Live ECG waveform'
-                  : 'Demo trace, not real data — shown while the backend is offline'
+                waveform.demo
+                  ? 'Demo trace, not real data'
+                  : 'Live ECG waveform from your most recent beat'
               }
             />
           </section>
