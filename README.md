@@ -39,6 +39,8 @@ The Git repository root is a thin wrapper; the whole application lives in the
         ├── alerts.test.js        alert-engine test suite (node:test)
         ├── history.js            pure paging + filtering logic for the History tab
         ├── history.test.js       history-logic test suite (node:test)
+        ├── App.test.jsx          component tests for the app shell (vitest + jsdom)
+        ├── charts.test.jsx       component tests for the charts (vitest + jsdom)
         ├── charts.jsx            every Recharts chart, split into its own bundle chunk
         ├── LazyChart.jsx         Suspense wrappers that load charts.jsx on demand
         ├── chartLoader.js        the single dynamic import of charts.jsx
@@ -61,6 +63,8 @@ The Git repository root is a thin wrapper; the whole application lives in the
 | `src/history.test.js` | ~385 | Covers that logic, including the two paging regressions: offset drift and live beats truncating loaded pages, and that no date preset can produce a range the validator rejects. |
 | `src/charts.jsx` | ~130 | Every Recharts chart — ECG trace, heart rate, class distribution. The only module importing `recharts`, so it becomes its own bundle chunk. |
 | `src/LazyChart.jsx` | ~41 | Suspense wrappers that load `charts.jsx` on demand, with placeholders that hold each panel's height. |
+| `src/App.test.jsx` | ~216 | Component tests through `<App />`: sign-in failure modes, first-run guidance, and the demo-trace provenance. |
+| `src/charts.test.jsx` | ~95 | Component tests that a demo trace cannot render like a real reading. |
 | `src/ErrorBoundary.jsx` | ~35 | Class-component boundary. Returns children untouched when healthy, so it adds no DOM and no layout change. |
 | `src/index.css` | ~82 | CSS custom properties: dark clinical surfaces, semantic alert colors, ECG trace green, fonts, radius, shadow. |
 | `src/App.css` | ~816 | ~125 component classes — nav, alert banner, panels, metric cards, charts, tables, filters, forms. |
@@ -198,7 +202,7 @@ This is deliberately simple project-grade auth, not production security.
 | Vite | 8.x | Dev server, build, preview |
 | Recharts | 3.8.1 | Line and bar charts, isolated in `charts.jsx` and loaded as a separate chunk |
 | ESLint | 10.x flat config | `@eslint/js` recommended + react-hooks + react-refresh |
-| Tests | `node:test` | Built into Node; no test framework is installed |
+| Tests | `node:test` + vitest 5 | `node:test` for pure logic (zero deps), vitest + jsdom + Testing Library for components |
 
 Function components with `React.Component` used only for the error boundary. No
 TypeScript and no state-management library — state is local
@@ -308,23 +312,45 @@ light theme.
 npm test
 ```
 
-Three suites, all `node:test` — no framework, no DOM, so they run on a bare checkout:
+113 tests across two runners. **The file extension decides which runner owns a file**, so
+they can never pick up each other's tests:
+
+| Extension | Runner | Needs | Command |
+| --- | --- | --- | --- |
+| `.test.js` | `node:test` | nothing — runs on a bare checkout | `npm run test:logic` |
+| `.test.jsx` | vitest + jsdom | dev dependencies installed | `npm run test:ui` |
+
+`npm test` runs both.
+
+**Pure logic — 90 tests, no framework, no DOM:**
 
 - **`alerts.test.js`** — the alert engine: the five levels, the precedence of
   `uncertain` over escalation, threshold boundaries, window bounds, caller-supplied
   thresholds, and the invariant that a confident normal beat is never reported urgent.
 - **`history.test.js`** — paging and filtering: query construction (the table and the
   CSV export must send the same filters), the client-side pass over live beats,
-  boundary-row de-duplication, last-page detection, and the row cap.
-- **`api.test.js`** — the REST client, including a throttled sign-in reported distinctly
-  from an unreachable server.
+  boundary-row de-duplication, last-page detection, the row cap, date-range validation
+  and the quick-range presets.
+- **`api.test.js`** — the REST client: a throttled sign-in reported distinctly from an
+  unreachable server, and the reconnect backoff schedule.
 
-The React components themselves are still untested; the logic worth covering was moved
-out of `App.jsx` into `alerts.js` and `history.js` precisely so it could be tested
-without a renderer. Rendering-level tests would need jsdom and a testing library.
+**Components — 23 tests, rendered in jsdom:**
 
-CI (`.github/workflows/ci.yml`) runs lint, tests and build on every push to `main` and
-every pull request.
+- **`charts.test.jsx`** — that a demo trace can never render like a real reading: the
+  caption, the marker class, and the assistive-tech label. Recharts measures its parent
+  and jsdom reports every element as 0×0, so the SVG paths are not asserted on — only
+  what sits outside the chart surface.
+- **`App.test.jsx`** — goes through `<App />` rather than importing the screens, so
+  routing between them is covered rather than mocked. Sign-in failure modes, the
+  first-run setup panel (including that it stays hidden when the backend is merely
+  down), and that the trace stays marked as a demo after the socket opens but before
+  any beat arrives.
+
+Both of those last two were written against real bugs, and were checked by
+reintroducing each bug and confirming the suite went red.
+
+CI (`.github/workflows/ci.yml`) runs lint, both suites and the build on every push to
+`main` and every pull request.
 
 ## Bundle
 
@@ -357,12 +383,14 @@ background so it is cached by the time a dashboard needs it.
   total.
 - **`ALERT_RANK` is exported but unused** by the UI; it exists for sorting or
   "highest alert in the last hour" style features.
-- **Unreferenced assets** remain in `public/icons.svg` and `src/assets/`.
-- **`App.jsx` still holds four screens** plus socket, polling and filter state. The
-  pure logic now lives in `alerts.js`, `history.js` and `charts.jsx`, but splitting
-  `LoginScreen`, `TrendsView`, `AccountView` and `Dashboard` into their own files is
-  the obvious next refactor — and the thing standing between those components and
-  having tests.
+- **Unreferenced assets.** `src/assets/{hero.png,react.svg,vite.svg}` are unused and
+  never bundled; `public/icons.svg` is also unused but *is* copied into `dist/`, so it
+  ships to users for nothing.
+- **`App.jsx` still holds four screens** plus socket, polling and filter state. The pure
+  logic now lives in `alerts.js`, `history.js` and `charts.jsx`, and the components are
+  covered through `<App />`, but splitting `LoginScreen`, `TrendsView`, `AccountView`
+  and `Dashboard` into their own files remains the obvious next refactor — testing them
+  in isolation currently means going through the whole app.
 - **One breakpoint.** The responsive CSS hangs off a single 720px media query, so
   tablet widths are cramped.
 
