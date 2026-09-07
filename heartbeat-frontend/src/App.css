@@ -114,6 +114,23 @@
   50% { opacity: 0.25; }
 }
 
+/* Respect the OS "reduce motion" setting. The pulsing dot runs forever, which
+   is exactly the kind of thing that setting exists to stop; the dot still
+   carries its colour and the pill still carries its text, so nothing is lost. */
+@media (prefers-reduced-motion: reduce) {
+  .connection-live .connection-dot {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
 /* ── Alert banner ─────────────────────────────────────────────────────────── */
 .alert-banner {
   display: flex;

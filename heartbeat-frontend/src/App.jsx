@@ -801,7 +801,15 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
       <ErrorBoundary key={page} title="This view failed to render">
       {page === 'dashboard' && (
         <>
-          <section className={`alert-banner alert-${alert.level}`} role="status">
+          {/* An urgent alert interrupts; anything calmer waits for a pause.
+              aria-live must be on an element that exists before the text
+              changes, which is why the level rides in the attribute rather
+              than swapping the whole node. */}
+          <section
+            className={`alert-banner alert-${alert.level}`}
+            role={alert.level === 'red' ? 'alert' : 'status'}
+            aria-live={alert.level === 'red' ? 'assertive' : 'polite'}
+          >
             <span className="alert-icon" aria-hidden="true">
               {ALERT_ICON[alert.level]}
             </span>
