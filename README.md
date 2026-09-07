@@ -29,8 +29,7 @@ The Git repository root is a thin wrapper; the whole application lives in the
     ├── package.json              deps and scripts
     ├── vite.config.js            Vite + React plugin + React Compiler (Babel preset)
     ├── public/
-    │   ├── favicon.svg           tab icon (referenced from index.html)
-    │   └── icons.svg             unused sprite left from earlier iterations
+    │   └── favicon.svg           tab icon (referenced from index.html)
     └── src/
         ├── main.jsx              React root, StrictMode mount, top-level boundary
         ├── App.jsx               all UI: login, dashboard, trends, history, account
@@ -48,7 +47,7 @@ The Git repository root is a thin wrapper; the whole application lives in the
         ├── ErrorBoundary.jsx     catches render errors so a panel fails, not the page
         ├── index.css             theme tokens + reset
         ├── App.css               component styling
-        └── assets/               hero.png, react.svg, vite.svg (currently unreferenced)
+        └── assets/               hero.png (currently unreferenced)
 ```
 
 ### File-by-file
@@ -383,9 +382,8 @@ background so it is cached by the time a dashboard needs it.
   total.
 - **`ALERT_RANK` is exported but unused** by the UI; it exists for sorting or
   "highest alert in the last hour" style features.
-- **Unreferenced assets.** `src/assets/{hero.png,react.svg,vite.svg}` are unused and
-  never bundled; `public/icons.svg` is also unused but *is* copied into `dist/`, so it
-  ships to users for nothing.
+- **`src/assets/hero.png` is unreferenced.** It is never bundled, so it costs nothing at
+  runtime — it is kept in case it is wanted for a landing page.
 - **`App.jsx` still holds four screens** plus socket, polling and filter state. The pure
   logic now lives in `alerts.js`, `history.js` and `charts.jsx`, and the components are
   covered through `<App />`, but splitting `LoginScreen`, `TrendsView`, `AccountView`
