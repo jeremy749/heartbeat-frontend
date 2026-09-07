@@ -53,13 +53,13 @@ The Git repository root is a thin wrapper; the whole application lives in the
 
 | File | Lines | What it holds |
 | --- | ---: | --- |
-| `src/App.jsx` | ~1050 | `LoginScreen`, `TrendsView`, `AccountView`, `Dashboard`, and the top-level `App` that chooses between login and dashboard based on a persisted session. |
+| `src/App.jsx` | ~1105 | `LoginScreen`, `TrendsView`, `AccountView`, `Dashboard`, and the top-level `App` that chooses between login and dashboard based on a persisted session. |
 | `src/api.js` | ~141 | `API_BASE` / `wsUrl()` derivation, in-memory bearer token, 401 handling, and one thin function per backend endpoint. |
 | `src/alerts.js` | ~73 | `evaluateAlert()`, the tunable `ALERT_THRESHOLDS`, and `ALERT_RANK`. Pure functions, framework-free, unit-testable, and portable to the backend later. |
 | `src/alerts.test.js` | ~242 | 30 cases over `evaluateAlert()` — levels, precedence, threshold boundaries, window bounds, and the "a confident normal beat is never urgent" invariant. |
-| `src/history.js` | ~121 | Paging and filtering for the History tab: `historyQuery()`, `filterReadings()`, `newRows()`, `isLastPage()`, `liveHistoryCap()`, `applyBeatToStats()`. Pure, so it is testable without a DOM. |
-| `src/history.test.js` | ~300 | Covers that logic, including the two paging regressions: offset drift and live beats truncating loaded pages. |
-| `src/charts.jsx` | ~112 | Every Recharts chart — ECG trace, heart rate, class distribution. The only module importing `recharts`, so it becomes its own bundle chunk. |
+| `src/history.js` | ~175 | Paging and filtering for the History tab: `historyQuery()`, `filterReadings()`, `newRows()`, `isLastPage()`, `liveHistoryCap()`, `applyBeatToStats()`, plus `dateRangeError()` and `presetRange()` for the date filters. Pure, so it is testable without a DOM. |
+| `src/history.test.js` | ~385 | Covers that logic, including the two paging regressions: offset drift and live beats truncating loaded pages, and that no date preset can produce a range the validator rejects. |
+| `src/charts.jsx` | ~130 | Every Recharts chart — ECG trace, heart rate, class distribution. The only module importing `recharts`, so it becomes its own bundle chunk. |
 | `src/LazyChart.jsx` | ~41 | Suspense wrappers that load `charts.jsx` on demand, with placeholders that hold each panel's height. |
 | `src/ErrorBoundary.jsx` | ~35 | Class-component boundary. Returns children untouched when healthy, so it adds no DOM and no layout change. |
 | `src/index.css` | ~82 | CSS custom properties: dark clinical surfaces, semantic alert colors, ECG trace green, fonts, radius, shadow. |
@@ -87,8 +87,16 @@ The Git repository root is a thin wrapper; the whole application lives in the
   readout distinguishes `Streaming` from `Waiting for data` — if no beat arrives for
   10 seconds (`STREAM_IDLE_MS`) the label stops claiming a live feed.
 - Large readouts for current classification, BPM, and confidence percentage.
-- When the socket is not live, a sine-composite waveform generator ticks every 100 ms
-  so the trace is never a dead line during development.
+- While an account has no readings at all, the Monitor tab shows setup steps — the API
+  base URL, `HEARTBEAT_DEVICE_KEY`, and `device_bridge.py --demo` for replaying sample
+  data without hardware. It waits for the first fetch to settle, so "you have no data"
+  is never confused with "we could not ask".
+- When the socket is not live, a sine-composite waveform generator ticks every 100 ms so
+  the trace is never a dead line during development. **It is rendered so it cannot be
+  read as a reading**: dashed, desaturated, on a hatched ground, and captioned "Demo
+  trace — not your data" across the plot. A synthetic rhythm drawn like a real one is
+  the most dangerous thing this UI could show, so the distinction is visual, not a note
+  in the corner.
 
 ### Alerts
 
@@ -139,8 +147,9 @@ moment it is shown again. It renders:
 
 - Table of past readings: timestamp, class, confidence percentage, and a colored status
   dot with its alert label.
-- Filters — beat type, minimum confidence (any / ≥60% / ≥80% / ≥90%), from/to dates, and
-  an abnormal-only checkbox.
+- Filters — beat type, minimum confidence (any / ≥60% / ≥80% / ≥90%), from/to dates with
+  Today / Last 7 days / Last 30 days presets, and an abnormal-only checkbox. A "from"
+  later than "to" is refused with an explanation rather than quietly returning nothing.
 - Every filter is sent to the server — type, min confidence, abnormal-only, and date
   bounds converted to ISO `since`/`until` — so the table and the CSV export are built
   from the same query. A second client-side pass applies the same predicates to beats
