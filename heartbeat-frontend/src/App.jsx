@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -1005,7 +1005,9 @@ function App() {
   // says so instead of just dumping the user back at the login form.
   const [notice, setNotice] = useState('')
 
-  const clearSession = () => {
+  // Stable identities: these only ever call state setters, so they never need
+  // to be rebuilt, and setAuthErrorHandler can then register one once.
+  const clearSession = useCallback(() => {
     setAuthToken(null)
     try {
       localStorage.removeItem(USER_KEY)
@@ -1013,20 +1015,20 @@ function App() {
       /* ignore */
     }
     setUser(null)
-  }
+  }, [])
 
-  const signOut = () => {
+  const signOut = useCallback(() => {
     apiLogout()
     setNotice('')
     clearSession()
-  }
+  }, [clearSession])
 
   // The token expired or was rejected. Don't call /api/logout with a credential
   // the server has already refused - just clear it and explain.
-  const expireSession = () => {
+  const expireSession = useCallback(() => {
     setNotice('Your session expired. Please sign in again.')
     clearSession()
-  }
+  }, [clearSession])
 
   // Whether this sign-in created the account. Session-only, so it is state
   // here rather than part of the stored user.
@@ -1036,7 +1038,7 @@ function App() {
   // with an explanation.
   useEffect(() => {
     setAuthErrorHandler(expireSession)
-  }, [])
+  }, [expireSession])
 
   if (!user) {
     return (
