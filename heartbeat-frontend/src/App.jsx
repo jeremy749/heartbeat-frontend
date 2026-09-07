@@ -450,7 +450,7 @@ function AccountView({ onSignOut }) {
 }
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
-function Dashboard({ user, onSignOut }) {
+function Dashboard({ user, onSignOut, justCreated }) {
   const userId = user.id
   const [page, setPage] = useState('dashboard')
   const [connection, setConnection] = useState('connecting')
@@ -743,8 +743,28 @@ function Dashboard({ user, onSignOut }) {
   const connectionLabel =
     connection === 'live' ? 'Live' : connection === 'connecting' ? 'Connecting' : 'Offline · demo'
 
+  const [showNewAccount, setShowNewAccount] = useState(true)
+
   return (
     <div className="app-shell">
+      {/* A new name signs up rather than failing, so a typo would otherwise
+          look like an existing account whose history had vanished. */}
+      {justCreated && showNewAccount && (
+        <div className="new-account-banner" role="status">
+          <span>
+            Created a new account for <strong>{user.name}</strong>, so it starts with no
+            readings. If you meant an existing name, sign out and check the spelling.
+          </span>
+          <button
+            type="button"
+            className="new-account-dismiss"
+            onClick={() => setShowNewAccount(false)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <nav className="app-nav">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
@@ -1006,6 +1026,10 @@ function App() {
     setUser(null)
   }
 
+  // Whether this sign-in created the account. Session-only, so it is state
+  // here rather than part of the stored user.
+  const [justCreated, setJustCreated] = useState(false)
+
   // If the server ever rejects our token (e.g. database reset), sign out.
   useEffect(() => {
     setAuthErrorHandler(signOut)
@@ -1014,20 +1038,23 @@ function App() {
   if (!user) {
     return (
       <LoginScreen
-        onSignedIn={(u) => {
+        onSignedIn={({ created, ...u }) => {
           setAuthToken(u.token)
           try {
+            // `created` is about this sign-in, not the account, so it is not
+            // persisted - otherwise the banner would return on every reload.
             localStorage.setItem(USER_KEY, JSON.stringify(u))
           } catch {
             /* ignore */
           }
+          setJustCreated(Boolean(created))
           setUser(u)
         }}
       />
     )
   }
 
-  return <Dashboard user={user} onSignOut={signOut} />
+  return <Dashboard user={user} onSignOut={signOut} justCreated={justCreated} />
 }
 
 export default App
