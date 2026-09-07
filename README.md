@@ -39,6 +39,9 @@ The Git repository root is a thin wrapper; the whole application lives in the
         ├── alerts.test.js        alert-engine test suite (node:test)
         ├── history.js            pure paging + filtering logic for the History tab
         ├── history.test.js       history-logic test suite (node:test)
+        ├── charts.jsx            every Recharts chart, split into its own bundle chunk
+        ├── LazyChart.jsx         Suspense wrappers that load charts.jsx on demand
+        ├── chartLoader.js        the single dynamic import of charts.jsx
         ├── api.test.js           REST client tests, incl. throttled sign-in (node:test)
         ├── ErrorBoundary.jsx     catches render errors so a panel fails, not the page
         ├── index.css             theme tokens + reset
@@ -50,12 +53,14 @@ The Git repository root is a thin wrapper; the whole application lives in the
 
 | File | Lines | What it holds |
 | --- | ---: | --- |
-| `src/App.jsx` | ~1033 | `LoginScreen`, `TrendsView`, `AccountView`, `Dashboard`, and the top-level `App` that chooses between login and dashboard based on a persisted session. |
-| `src/api.js` | ~111 | `API_BASE` / `wsUrl()` derivation, in-memory bearer token, 401 handling, and one thin function per backend endpoint. |
+| `src/App.jsx` | ~1050 | `LoginScreen`, `TrendsView`, `AccountView`, `Dashboard`, and the top-level `App` that chooses between login and dashboard based on a persisted session. |
+| `src/api.js` | ~141 | `API_BASE` / `wsUrl()` derivation, in-memory bearer token, 401 handling, and one thin function per backend endpoint. |
 | `src/alerts.js` | ~73 | `evaluateAlert()`, the tunable `ALERT_THRESHOLDS`, and `ALERT_RANK`. Pure functions, framework-free, unit-testable, and portable to the backend later. |
 | `src/alerts.test.js` | ~242 | 30 cases over `evaluateAlert()` — levels, precedence, threshold boundaries, window bounds, and the "a confident normal beat is never urgent" invariant. |
 | `src/history.js` | ~121 | Paging and filtering for the History tab: `historyQuery()`, `filterReadings()`, `newRows()`, `isLastPage()`, `liveHistoryCap()`, `applyBeatToStats()`. Pure, so it is testable without a DOM. |
 | `src/history.test.js` | ~300 | Covers that logic, including the two paging regressions: offset drift and live beats truncating loaded pages. |
+| `src/charts.jsx` | ~112 | Every Recharts chart — ECG trace, heart rate, class distribution. The only module importing `recharts`, so it becomes its own bundle chunk. |
+| `src/LazyChart.jsx` | ~41 | Suspense wrappers that load `charts.jsx` on demand, with placeholders that hold each panel's height. |
 | `src/ErrorBoundary.jsx` | ~35 | Class-component boundary. Returns children untouched when healthy, so it adds no DOM and no layout change. |
 | `src/index.css` | ~82 | CSS custom properties: dark clinical surfaces, semantic alert colors, ECG trace green, fonts, radius, shadow. |
 | `src/App.css` | ~816 | ~125 component classes — nav, alert banner, panels, metric cards, charts, tables, filters, forms. |
@@ -67,8 +72,10 @@ The Git repository root is a thin wrapper; the whole application lives in the
 ### Live monitor (`Monitor` tab)
 
 - Opens a WebSocket to `${API_BASE}/ws?token=…` and listens for
-  `{ type: "beat", data, samples }` frames; on close it retries every 2 seconds, except
-  after an auth rejection (close code `1008`/`4401`), which signs the user out.
+  `{ type: "beat", data, samples }` frames. On close it reconnects with exponential
+  backoff — 1s doubling to a 30s ceiling, each wait carrying random jitter so many open
+  tabs don't retry in lockstep — resetting on a successful open. An auth rejection
+  (close code `1008`/`4401`) stops retrying and signs the user out with an explanation.
 - The server is expected to authenticate the socket and stream only that user's beats.
   The client additionally drops beats whose `user_id` isn't the signed-in user, as
   defence in depth.
@@ -114,7 +121,8 @@ on a reading, the UI trusts that and skips local evaluation.
 ### Trends tab
 
 Polls `/api/trends?points=60` and `/api/strip?count=8` every 5 seconds while the tab is
-open, and renders:
+open and the browser tab is visible — a backgrounded tab stops polling and refreshes the
+moment it is shown again. It renders:
 
 - **HRV metric cards** — mean BPM, RMSSD (beat-to-beat variability, ms), and SDNN
   (overall variability, ms), each with a hover/focus `i` badge carrying a plain-language
@@ -175,7 +183,7 @@ This is deliberately simple project-grade auth, not production security.
 | React | 19.2.6 | Function components and hooks only |
 | React Compiler | babel-plugin-react-compiler 1.0 | Enabled via `@rolldown/plugin-babel` in `vite.config.js` |
 | Vite | 8.x | Dev server, build, preview |
-| Recharts | 3.8.1 | Line and bar charts in responsive containers |
+| Recharts | 3.8.1 | Line and bar charts, isolated in `charts.jsx` and loaded as a separate chunk |
 | ESLint | 10.x flat config | `@eslint/js` recommended + react-hooks + react-refresh |
 | Tests | `node:test` | Built into Node; no test framework is installed |
 
@@ -305,6 +313,22 @@ without a renderer. Rendering-level tests would need jsdom and a testing library
 CI (`.github/workflows/ci.yml`) runs lint, tests and build on every push to `main` and
 every pull request.
 
+## Bundle
+
+The build emits two chunks:
+
+| Chunk | Raw | Gzipped | When it loads |
+| --- | ---: | ---: | --- |
+| entry | 226.5 kB | 71.5 kB | immediately |
+| charts | 362.2 kB | 106.6 kB | on first chart render, or prefetched from the sign-in screen |
+
+Recharts is the bulk of the second one. Because the Monitor tab charts as well as the
+Trends tab, splitting per-route would not have helped — the split is per-*concern*, with
+`charts.jsx` as the only module importing `recharts`. The shell, alert banner and
+numeric readouts therefore paint without waiting on charting code, and a visitor sitting
+on the sign-in form never blocks on it: `preloadCharts()` warms the chunk in the
+background so it is cached by the time a dashboard needs it.
+
 ## Known limitations
 
 - **Optimistic stats.** Live beats increment local counters without re-fetching
@@ -317,14 +341,16 @@ every pull request.
   filter, but beats arriving over the socket are matched against the filters in the
   browser, so the counts shown reflect what has been loaded rather than a server-side
   total.
-- **Reconnects have no backoff.** The socket retries every 2 seconds indefinitely,
-  except after an auth rejection.
-- **Trends poll while hidden.** The 5-second poll keeps running in a background tab.
 - **`ALERT_RANK` is exported but unused** by the UI; it exists for sorting or
   "highest alert in the last hour" style features.
 - **Unreferenced assets** remain in `public/icons.svg` and `src/assets/`.
-- **`App.jsx` is ~980 lines** holding four screens plus socket, polling and filter
-  state; it is the obvious next refactor.
+- **`App.jsx` still holds four screens** plus socket, polling and filter state. The
+  pure logic now lives in `alerts.js`, `history.js` and `charts.jsx`, but splitting
+  `LoginScreen`, `TrendsView`, `AccountView` and `Dashboard` into their own files is
+  the obvious next refactor — and the thing standing between those components and
+  having tests.
+- **One breakpoint.** The responsive CSS hangs off a single 720px media query, so
+  tablet widths are cramped.
 
 ---
 
