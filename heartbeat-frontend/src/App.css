@@ -754,6 +754,13 @@
   color: var(--red);
 }
 
+/* Holds the panel's height while the chart chunk loads, so nothing jumps. */
+.chart-loading {
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--surface-2), transparent);
+  opacity: 0.4;
+}
+
 .panel-note {
   margin: 0;
   padding: 20px 16px;

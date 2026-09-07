@@ -1,16 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+import { ClassDistributionChart, EcgChart, HeartRateChart } from './LazyChart.jsx'
+import { preloadCharts } from './chartLoader.js'
 import {
   WS_AUTH_CLOSE_CODES,
   changePassword as apiChangePassword,
@@ -248,21 +238,10 @@ function TrendsView({ trends, strip, error }) {
             keep their classification and heart rate, but not the trace.
           </p>
         ) : (
-        <div className="waveform">
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={stripData} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
-              <CartesianGrid stroke="var(--grid)" strokeDasharray="2 6" vertical={false} />
-              <XAxis dataKey="x" tick={false} axisLine={false} tickLine={false} />
-              <YAxis domain={['auto', 'auto']} tick={false} axisLine={false} tickLine={false} width={8} />
-              <Tooltip
-                contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)' }}
-                formatter={(value) => [`${Number(value).toFixed(2)} mV`, 'ECG']}
-                labelFormatter={() => ''}
-              />
-              <Line type="monotone" dataKey="value" stroke="var(--trace)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+          <EcgChart
+            data={stripData}
+            label={`Stored ECG trace for the last ${strip?.beats ?? 0} beats`}
+          />
         )}
       </section>
 
@@ -281,21 +260,7 @@ function TrendsView({ trends, strip, error }) {
           <h2 className="panel-title">Heart rate</h2>
           <span className="panel-meta">last {points} beats</span>
         </div>
-        <div className="waveform">
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={hr} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
-              <CartesianGrid stroke="var(--grid)" strokeDasharray="2 6" vertical={false} />
-              <XAxis dataKey="i" tick={false} axisLine={false} tickLine={false} />
-              <YAxis domain={['auto', 'auto']} width={32} tick={{ fill: 'var(--text-faint)', fontSize: 12 }} axisLine={false} tickLine={false} />
-              <Tooltip
-                contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)' }}
-                formatter={(value) => [`${Math.round(value)} bpm`, 'Heart rate']}
-                labelFormatter={() => ''}
-              />
-              <Line type="monotone" dataKey="bpm" stroke="var(--trace)" strokeWidth={2} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+        <HeartRateChart data={hr} label={`Heart rate over the last ${points} beats`} />
       </section>
 
       <section className="panel">
@@ -303,21 +268,11 @@ function TrendsView({ trends, strip, error }) {
           <h2 className="panel-title">Beats by type</h2>
           <span className="panel-meta">all readings</span>
         </div>
-        <div className="waveform">
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={classDist} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
-              <CartesianGrid stroke="var(--grid)" strokeDasharray="2 6" vertical={false} />
-              <XAxis dataKey="name" tick={{ fill: 'var(--text-dim)', fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis width={32} tick={{ fill: 'var(--text-faint)', fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <Tooltip cursor={{ fill: 'var(--surface-2)' }} contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)' }} />
-              <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                {classDist.map((entry) => (
-                  <Cell key={entry.name} fill={CLASS_COLORS[entry.name] || 'var(--accent)'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        <ClassDistributionChart
+          data={classDist}
+          colors={CLASS_COLORS}
+          label="Beats by classification across all readings"
+        />
       </section>
 
       <section className="panel">
@@ -852,21 +807,17 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
                 {recentlyStreaming ? 'Updating on each beat' : connection === 'live' ? 'Connected · waiting for data' : 'Simulated · offline'}
               </span>
             </div>
-            <div className="waveform">
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={waveform} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
-                  <CartesianGrid stroke="var(--grid)" strokeDasharray="2 6" vertical={false} />
-                  <XAxis dataKey="x" tick={false} axisLine={false} tickLine={false} />
-                  <YAxis domain={['auto', 'auto']} tick={false} axisLine={false} tickLine={false} width={8} />
-                  <Tooltip
-                    cursor={{ stroke: 'var(--trace)', strokeOpacity: 0.3 }}
-                    contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text)' }}
-                    formatter={(value) => [`${Number(value).toFixed(2)} mV`, 'ECG']}
-                  />
-                  <Line type="monotone" dataKey="value" stroke="var(--trace)" strokeWidth={2} dot={false} isAnimationActive={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <EcgChart
+              data={waveform}
+              height={300}
+              strokeWidth={2}
+              cursor
+              label={
+                connection === 'live'
+                  ? 'Live ECG waveform'
+                  : 'Simulated ECG waveform, shown while offline'
+              }
+            />
           </section>
 
           <section className="metrics">
@@ -1058,6 +1009,13 @@ function App() {
   useEffect(() => {
     setAuthErrorHandler(expireSession)
   }, [expireSession])
+
+  // Fetch the chart chunk while the sign-in form is on screen, so it is already
+  // cached by the time the dashboard needs it. Signed-in users skip this and
+  // load it as the monitor renders.
+  useEffect(() => {
+    if (!user) preloadCharts()
+  }, [user])
 
   if (!user) {
     return (
