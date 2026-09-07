@@ -25,6 +25,7 @@ import {
   fetchTrends,
   login as apiLogin,
   logout as apiLogout,
+  reconnectDelay,
   reportUrl,
   setAuthErrorHandler,
   setAuthToken,
@@ -569,6 +570,9 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     if (page !== 'trends') return
     let active = true
     const load = () => {
+      // Nobody is looking at a background tab; don't spend their battery or the
+      // server's time on it. Loads again as soon as the tab comes back.
+      if (document.hidden) return
       Promise.all([fetchTrends(60), fetchStrip(8)])
         .then(([t, s]) => {
           if (!active) return
@@ -583,9 +587,11 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     }
     load()
     const id = setInterval(load, 5000)
+    document.addEventListener('visibilitychange', load)
     return () => {
       active = false
       clearInterval(id)
+      document.removeEventListener('visibilitychange', load)
     }
   }, [page, userId])
 
@@ -593,6 +599,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   useEffect(() => {
     let stopped = false
     let reconnectTimer = null
+    let attempt = 0
     const connect = () => {
       let ws
       try {
@@ -602,7 +609,10 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
         return
       }
       wsRef.current = ws
-      ws.onopen = () => setConnection('live')
+      ws.onopen = () => {
+        attempt = 0 // a good connection resets the backoff
+        setConnection('live')
+      }
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
@@ -638,7 +648,8 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
           expiredRef.current()
           return
         }
-        reconnectTimer = setTimeout(connect, 2000)
+        reconnectTimer = setTimeout(connect, reconnectDelay(attempt))
+        attempt += 1
       }
       ws.onerror = () => ws.close()
     }

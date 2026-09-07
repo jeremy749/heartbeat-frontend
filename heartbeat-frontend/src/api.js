@@ -19,6 +19,19 @@ export const wsUrl = () => `${WS_ORIGIN}/ws${qs({ token: authToken })}`
 // Reconnecting after one of these just hammers the server, so the app signs out.
 export const WS_AUTH_CLOSE_CODES = new Set([1008, 4401])
 
+export const RECONNECT_BASE_MS = 1000
+export const RECONNECT_MAX_MS = 30000
+
+// How long to wait before reconnect attempt `attempt` (0-based). Doubles up to
+// a 30s ceiling, then holds. A fixed 2s retry means a browser left open against
+// a backend that is down knocks on the door 1800 times an hour, and every such
+// tab does it in lockstep; the random half of the delay spreads reconnects out
+// so they don't all land the moment the server comes back.
+export const reconnectDelay = (attempt = 0, random = Math.random) => {
+  const ceiling = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt)
+  return Math.round(ceiling * (0.5 + random() * 0.5))
+}
+
 // ── Session token ─────────────────────────────────────────────────────────────
 let authToken = null
 let onAuthError = () => {}
