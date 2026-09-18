@@ -22,6 +22,7 @@ vi.mock('./api', async (importOriginal) => {
     fetchTrends: vi.fn(),
     fetchStrip: vi.fn(),
     fetchAccount: vi.fn(),
+    wsUrl: vi.fn(),
   }
 })
 
@@ -44,6 +45,13 @@ class SilentWebSocket {
 }
 SilentWebSocket.instances = []
 
+// The app mints a ticket before opening the socket, so the instance appears a
+// microtask or two after render rather than synchronously.
+const latestSocket = async () => {
+  await waitFor(() => expect(SilentWebSocket.instances.length).toBeGreaterThan(0))
+  return SilentWebSocket.instances.at(-1)
+}
+
 beforeEach(() => {
   SilentWebSocket.instances = []
   globalThis.WebSocket = SilentWebSocket
@@ -54,6 +62,7 @@ beforeEach(() => {
   api.fetchTrends.mockResolvedValue({})
   api.fetchStrip.mockResolvedValue({})
   api.fetchAccount.mockResolvedValue({ name: 'Alice', reading_count: 0 })
+  api.wsUrl.mockResolvedValue('ws://localhost:8000/ws?ticket=TKT')
 })
 
 afterEach(() => {
@@ -159,7 +168,7 @@ describe('signed in · the trace is never mistaken for a reading', () => {
     render(<App />)
     await screen.findByText(/demo trace — not your data/i)
 
-    const socket = SilentWebSocket.instances.at(-1)
+    const socket = await latestSocket()
     await act(async () => {
       socket.onopen()
     })
@@ -171,7 +180,7 @@ describe('signed in · the trace is never mistaken for a reading', () => {
     render(<App />)
     await screen.findByText(/demo trace — not your data/i)
 
-    const socket = SilentWebSocket.instances.at(-1)
+    const socket = await latestSocket()
     await act(async () => {
       socket.onopen()
       socket.onmessage({
@@ -198,7 +207,7 @@ describe('signed in · the trace is never mistaken for a reading', () => {
     render(<App />)
     await screen.findByText(/demo trace — not your data/i)
 
-    const socket = SilentWebSocket.instances.at(-1)
+    const socket = await latestSocket()
     await act(async () => {
       socket.onopen()
       socket.onmessage({

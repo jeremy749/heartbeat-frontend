@@ -91,6 +91,25 @@ const BEAT_TYPES = [
   ['Unclassified', 'The model could not confidently categorize this beat (or it was paced/unknown).'],
 ]
 
+// Both downloads need a ticket before they have a URL, so neither can be a
+// plain href. Clicking a generated link keeps the browser's own download
+// handling (and avoids the popup blocker that window.open would hit after an
+// await).
+const startDownload = async (buildUrl, onError) => {
+  try {
+    const url = await buildUrl()
+    const a = document.createElement('a')
+    a.href = url
+    a.rel = 'noreferrer'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } catch (err) {
+    if (err.message !== 'UNAUTHORIZED') onError?.()
+  }
+}
+
+
 // A small "i" badge that shows an explanation on hover or keyboard focus.
 function InfoDot({ text }) {
   return (
@@ -188,6 +207,7 @@ function LoginScreen({ onSignedIn, notice }) {
 
 // ── Trends view ───────────────────────────────────────────────────────────────
 function TrendsView({ trends, strip, error }) {
+  const [downloadError, setDownloadError] = useState(null)
   const hr = (trends?.heart_rate || []).map((p, i) => ({ i, bpm: p.bpm }))
   const classDist = Object.entries(trends?.class_distribution || {}).map(([name, count]) => ({ name, count }))
   const alertDist = trends?.alert_distribution || {}
@@ -199,9 +219,16 @@ function TrendsView({ trends, strip, error }) {
     <section className="trends">
       {error && <p className="panel-error">{error}</p>}
       <div className="trends-toolbar">
-        <a className="export-btn" href={reportUrl()} target="_blank" rel="noreferrer">
+        <button
+          type="button"
+          className="export-btn"
+          onClick={() =>
+            startDownload(reportUrl, () => setDownloadError('Could not build the report.'))
+          }
+        >
           Download PDF report
-        </a>
+        </button>
+        {downloadError && <p className="panel-error">{downloadError}</p>}
       </div>
 
       <div className="metrics">
@@ -415,6 +442,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
   const [historyReloads, setHistoryReloads] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState(null)
+  const [exportError, setExportError] = useState(null)
   // Which query the rows in `history` answer, and whether it reached the end.
   // Loading is derived from this rather than set at the top of the effect, so
   // changing a filter does not need a synchronous state write to show a
@@ -598,12 +626,24 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
     let stopped = false
     let reconnectTimer = null
     let attempt = 0
-    const connect = () => {
+    const connect = async () => {
       let ws
       try {
-        ws = new WebSocket(wsUrl())
-      } catch {
+        // Minting the ticket is a round trip, so the socket may have been torn
+        // down (sign-out, unmount) by the time it lands.
+        const url = await wsUrl()
+        if (stopped) return
+        ws = new WebSocket(url)
+      } catch (err) {
         setConnection('offline')
+        if (stopped) return
+        // A 401 has already signed the user out; retrying that is pointless.
+        // Anything else - backend down, network blip - must keep retrying, or
+        // a failed ticket would end the reconnect loop for good.
+        if (err.message !== 'UNAUTHORIZED') {
+          reconnectTimer = setTimeout(connect, reconnectDelay(attempt))
+          attempt += 1
+        }
         return
       }
       wsRef.current = ws
@@ -708,7 +748,6 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
 
   const filteredHistory = useMemo(() => filterReadings(history, filters), [history, filters])
 
-  const exportHref = exportUrl(historyParams)
 
   const hasFilters = hasActiveFilters(filters)
 
@@ -997,9 +1036,18 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
                 <input type="checkbox" checked={abnormalOnly} onChange={(e) => setAbnormalOnly(e.target.checked)} />
                 <span>Abnormal only</span>
               </label>
-              <a className="export-btn" href={exportHref} download>
+              <button
+                type="button"
+                className="export-btn"
+                onClick={() =>
+                  startDownload(
+                    () => exportUrl(historyParams),
+                    () => setExportError('Could not build the export.'),
+                  )
+                }
+              >
                 Export CSV
-              </a>
+              </button>
             </div>
           </div>
 
@@ -1059,6 +1107,7 @@ function Dashboard({ user, onSignOut, onSessionExpired, justCreated }) {
               </tbody>
             </table>
           </div>
+          {exportError && <p className="panel-error">{exportError}</p>}
           {loadMoreError && <p className="panel-error">{loadMoreError}</p>}
           {allLoaded ? (
             <p className="load-more-done">No older readings.</p>

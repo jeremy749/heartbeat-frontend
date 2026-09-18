@@ -8,11 +8,25 @@ export const API_BASE =
 
 const WS_ORIGIN = API_BASE.replace(/^http/, 'ws')
 
-// The browser WebSocket API cannot set an Authorization header, so the session
-// token travels as a query parameter. The server is expected to authenticate on
-// upgrade and send only this user's beats; the user_id check on the client is a
-// second line of defence, not the boundary.
-export const wsUrl = () => `${WS_ORIGIN}/ws${qs({ token: authToken })}`
+// Neither a WebSocket handshake nor a download link can carry an Authorization
+// header, so something has to go in the query string - and query strings are
+// written to the server's access log and the browser's history. That something
+// is a ticket: seconds long, good for one request, and spent on redemption, so
+// a URL recovered from a log is worthless. The session token itself never
+// appears in a URL.
+export const fetchTicket = async () => {
+  const res = await fetch(`${API_BASE}/api/ticket`, { method: 'POST', headers: authHeaders() })
+  if (res.status === 401) {
+    onAuthError()
+    throw new Error('UNAUTHORIZED')
+  }
+  if (!res.ok) throw new Error(`ticket -> ${res.status}`)
+  return (await res.json()).ticket
+}
+
+// A fresh ticket per connection; reconnects mint their own, since the previous
+// one was spent opening the socket that just dropped.
+export const wsUrl = async () => `${WS_ORIGIN}/ws${qs({ ticket: await fetchTicket() })}`
 
 // Close codes meaning "that token is no good": 1008 is the standard policy
 // violation code, 4401 the conventional private-range mapping of HTTP 401.
@@ -135,7 +149,9 @@ export const changePassword = (current_password, new_password) =>
 export const deleteReadings = () => send('DELETE', '/api/account/readings')
 export const deleteAccount = () => send('DELETE', '/api/account')
 
-// Plain download links, so the token rides along as a query param.
-export const exportUrl = (params = {}) =>
-  `${API_BASE}/api/export.csv${qs({ ...params, token: authToken })}`
-export const reportUrl = () => `${API_BASE}/api/report.pdf${qs({ token: authToken })}`
+// Download URLs. Built on demand rather than rendered into an href, because
+// each one needs its own ticket and a ticket is only good for a minute.
+export const exportUrl = async (params = {}) =>
+  `${API_BASE}/api/export.csv${qs({ ...params, ticket: await fetchTicket() })}`
+export const reportUrl = async () =>
+  `${API_BASE}/api/report.pdf${qs({ ticket: await fetchTicket() })}`

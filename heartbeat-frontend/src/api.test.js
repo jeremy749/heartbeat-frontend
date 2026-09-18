@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, it } from 'node:test'
 
-import { RECONNECT_BASE_MS, RECONNECT_MAX_MS, login, reconnectDelay } from './api.js'
+import {
+  API_BASE,
+  RECONNECT_BASE_MS,
+  RECONNECT_MAX_MS,
+  exportUrl,
+  fetchTicket,
+  login,
+  reconnectDelay,
+  reportUrl,
+  setAuthErrorHandler,
+  setAuthToken,
+  wsUrl,
+} from './api.js'
 
 const realFetch = globalThis.fetch
 
@@ -133,5 +145,88 @@ describe('reconnectDelay', () => {
   it('defaults to the first attempt', () => {
     const wait = reconnectDelay()
     assert.ok(wait >= RECONNECT_BASE_MS / 2 && wait <= RECONNECT_BASE_MS)
+  })
+})
+
+// A session token is valid for thirty days and a URL ends up in the server's
+// access log and the browser's history, so nothing here may put one in a query
+// string. Downloads and the socket carry a one-use ticket instead.
+describe('tickets', () => {
+  const ticketResponse = () => stubResponse({ status: 200, body: { ticket: 'TKT', expires_in: 60 } })
+
+  it('mints a ticket', async () => {
+    stubFetch(ticketResponse())
+    assert.equal(await fetchTicket(), 'TKT')
+  })
+
+  it('sends the session token in the header, never the URL', async () => {
+    setAuthToken('SESSION-TOKEN')
+    let seen = null
+    globalThis.fetch = async (url, init) => {
+      seen = { url, init }
+      return ticketResponse()
+    }
+    await fetchTicket()
+    setAuthToken(null)
+
+    assert.equal(seen.init.method, 'POST')
+    assert.equal(seen.init.headers.Authorization, 'Bearer SESSION-TOKEN')
+    assert.ok(!String(seen.url).includes('SESSION-TOKEN'), seen.url)
+  })
+
+  it('puts a ticket in the socket URL, not the session token', async () => {
+    setAuthToken('SESSION-TOKEN')
+    stubFetch(ticketResponse())
+    const url = await wsUrl()
+    setAuthToken(null)
+
+    assert.ok(url.startsWith('ws'), url)
+    assert.ok(url.includes('ticket=TKT'), url)
+    assert.ok(!url.includes('SESSION-TOKEN'), url)
+    assert.ok(!url.includes('token=SESSION'), url)
+  })
+
+  it('puts a ticket in the export URL, alongside the filters', async () => {
+    setAuthToken('SESSION-TOKEN')
+    stubFetch(ticketResponse())
+    const url = await exportUrl({ type: 'Ventricular' })
+    setAuthToken(null)
+
+    assert.ok(url.startsWith(`${API_BASE}/api/export.csv?`), url)
+    assert.ok(url.includes('ticket=TKT'), url)
+    assert.ok(url.includes('type=Ventricular'), url)
+    assert.ok(!url.includes('SESSION-TOKEN'), url)
+  })
+
+  it('puts a ticket in the report URL', async () => {
+    setAuthToken('SESSION-TOKEN')
+    stubFetch(ticketResponse())
+    const url = await reportUrl()
+    setAuthToken(null)
+
+    assert.ok(url.includes('ticket=TKT'), url)
+    assert.ok(!url.includes('SESSION-TOKEN'), url)
+  })
+
+  it('signs out when the session is no longer good', async () => {
+    let signedOut = false
+    setAuthErrorHandler(() => {
+      signedOut = true
+    })
+    stubFetch(stubResponse({ status: 401 }))
+    await assert.rejects(fetchTicket(), { message: 'UNAUTHORIZED' })
+    setAuthErrorHandler(null)
+    assert.equal(signedOut, true)
+  })
+
+  it('reports other failures without signing out', async () => {
+    let signedOut = false
+    setAuthErrorHandler(() => {
+      signedOut = true
+    })
+    stubFetch(stubResponse({ status: 503 }))
+    await assert.rejects(fetchTicket(), { message: 'ticket -> 503' })
+    setAuthErrorHandler(null)
+    assert.equal(signedOut, false)
   })
 })
