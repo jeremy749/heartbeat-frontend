@@ -248,6 +248,28 @@ dev-server restart or a rebuild.
 
 ---
 
+## Deploy it
+
+`netlify.toml` holds the build settings. The one that matters: this app lives in
+`heartbeat-frontend/` inside the repo, and without `base` Netlify runs npm at
+the root, finds no `package.json`, and fails with a message that never mentions
+why. The SPA redirect is there for the same class of reason — without it a
+refresh on a sub-path 404s, because no such file was ever built.
+
+Connect the repo in Netlify and set one environment variable:
+
+| Variable | Value |
+|----------|-------|
+| `VITE_API_URL` | the deployed backend's URL, e.g. `https://heartbeat-backend.onrender.com` |
+
+Vite reads it at **build** time, so changing it needs a redeploy — editing the
+variable alone leaves the old URL baked into the bundle. The backend already
+allows any `*.netlify.app` origin; a custom domain goes in its `CORS_ORIGINS`.
+
+The WebSocket URL is derived from `VITE_API_URL`, so an `https://` backend gives
+`wss://` automatically. A backend on plain `http://` will not work from a
+Netlify site — the browser blocks the mixed content.
+
 ## Backend contract
 
 Everything the frontend calls, all defined in `src/api.js`:

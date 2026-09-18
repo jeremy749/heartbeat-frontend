@@ -1,0 +1,24 @@
+# Netlify build settings.
+#
+# The app lives one directory down from the repo root, which Netlify does not
+# guess: without `base` it runs npm at the root, finds no package.json, and
+# fails with a message that does not mention the reason.
+[build]
+  base = "heartbeat-frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Vite 8 and ESLint 10 need a current Node; the test script's glob needs 21+.
+  NODE_VERSION = "22"
+
+# A single-page app: every path has to return index.html, or a refresh on
+# /history 404s because no such file was ever built.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# VITE_API_URL is read at build time, so set it in Netlify's environment
+# (Site settings > Environment variables) and redeploy after changing it -
+# editing it without a rebuild leaves the old value baked into the bundle.
